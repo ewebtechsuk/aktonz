@@ -1,0 +1,29 @@
+# WordPress uploads
+wp-content/uploads/
+wp-content/cache/
+wp-content/ai1wm-backups/
+# All-in-One WP Migration backups
+*.wpress
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Logs
+debug.log
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Node dependencies
+node_modules/
+
+# Build artifacts
+build/
+dist/
+
+# Dependency directories
+vendor/
+
