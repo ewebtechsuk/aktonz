@@ -40,3 +40,15 @@ operations.
 ## Handling large files
 
 Avoid committing large files such as `.wpress` archives directly to the repository. Use Git LFS to manage them or add the file patterns to `.gitignore` to keep the repository lightweight.
+
+## Using Git LFS
+
+To store large `.wpress` files in the repo, initialize Git LFS and track the pattern:
+
+```bash
+git lfs install
+git lfs track "*.wpress"
+git add .gitattributes
+```
+
+GitHub blocks files larger than 100 MB unless they are handled with LFS.
