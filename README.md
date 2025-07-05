@@ -1,0 +1,33 @@
+# Aktonz WordPress Project
+
+This repository contains the WordPress files for the Aktonz project. Use Git for version control and push changes to the shared staging branch when ready.
+
+## Initializing the repository
+
+1. Clone the repository and navigate into the directory.
+2. Run `git init` if the repository is not already initialized.
+3. Configure your user name and email if needed with `git config`.
+
+## Committing WordPress files
+
+1. Add or update your WordPress files in the repository directory.
+2. Stage the changes with `git add .`.
+3. Commit with a descriptive message:
+   ```bash
+   git commit -m "Add theme updates"
+   ```
+
+## Pushing to the `staging` branch
+
+1. Ensure your local branch is named `staging` or create it:
+   ```bash
+   git checkout -b staging
+   ```
+2. Push the branch to the remote:
+   ```bash
+   git push origin staging
+   ```
+
+## Handling large files
+
+Avoid committing large files such as `.wpress` archives directly to the repository. Use Git LFS to manage them or add the file patterns to `.gitignore` to keep the repository lightweight.
