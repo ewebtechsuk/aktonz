@@ -1,7 +1,7 @@
 # WordPress uploads
-wp-content/uploads/
-wp-content/cache/
-wp-content/ai1wm-backups/
+**/wp-content/uploads/
+**/wp-content/cache/
+**/wp-content/ai1wm-backups/
 # All-in-One WP Migration backups
 *.wpress
 
