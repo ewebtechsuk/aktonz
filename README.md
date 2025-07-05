@@ -32,6 +32,11 @@ This repository contains the WordPress files for the Aktonz project. Use Git for
    git push origin staging
    ```
 
+When pushing to GitHub, authenticate either via SSH using a repository URL like
+`git@github.com:<user>/<repo>.git`, or over HTTPS using a Personal Access Token
+in place of your password. GitHub no longer accepts account passwords for push
+operations.
+
 ## Handling large files
 
 Avoid committing large files such as `.wpress` archives directly to the repository. Use Git LFS to manage them or add the file patterns to `.gitignore` to keep the repository lightweight.
