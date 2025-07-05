@@ -2,6 +2,13 @@
 
 This repository contains the WordPress files for the Aktonz project. Use Git for version control and push changes to the shared staging branch when ready.
 
+Future development should occur on the `staging` branch created from `work`. Push the branch with upstream tracking using:
+
+```bash
+git checkout -b staging    # from the work branch
+git push -u origin staging # set upstream tracking
+```
+
 ## Initializing the repository
 
 1. Clone the repository and navigate into the directory.
