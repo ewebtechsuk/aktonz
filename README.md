@@ -25,12 +25,14 @@ This repository contains the WordPress files for the Aktonz project. Use Git for
 
 1. Ensure your local branch is named `staging` or create it:
    ```bash
-   git checkout -b staging
+   git checkout -b staging         # if it doesn't exist
    ```
-2. Push the branch to the remote:
+2. Push the branch to the remote and set it as upstream:
    ```bash
-   git push origin staging
+   git push -u origin staging      # set upstream
    ```
+
+All future development occurs on this `staging` branch.
 
 When pushing to GitHub, authenticate either via SSH using a repository URL like
 `git@github.com:<user>/<repo>.git`, or over HTTPS using a Personal Access Token
