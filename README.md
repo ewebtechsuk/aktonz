@@ -11,11 +11,11 @@ This repository contains the WordPress files for the Aktonz project. Use Git for
    git config --global user.name "Your Name"
    git config --global user.email "you@example.com"
    ```
-4. Add the remote so you can push and pull changes:
+4. Add the repository as the `origin` remote so you can push and pull changes:
    ```bash
-   git remote add origin git@github.com:<user>/aktonz.git
+   git remote add origin git@github.com:ewebtechsuk/aktonz.git
    ```
-   Pushes and pulls require this remote.
+   All pushes and pulls require this remote.
 
 ## Committing WordPress files
 
