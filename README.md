@@ -6,7 +6,11 @@ This repository contains the WordPress files for the Aktonz project. Use Git for
 
 1. Clone the repository and navigate into the directory.
 2. Run `git init` if the repository is not already initialized.
-3. Configure your user name and email if needed with `git config`.
+3. Configure your user name and email to prevent auto-generated author info:
+   ```bash
+   git config --global user.name "Your Name"
+   git config --global user.email "you@example.com"
+   ```
 
 ## Committing WordPress files
 
