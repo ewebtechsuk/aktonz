@@ -60,6 +60,19 @@ git add .gitattributes
 
 GitHub blocks files larger than 100 MB unless they are handled with LFS.
 
+## Removing a committed backup
+
+If a `.wpress` archive or other backup was accidentally committed, untrack it
+while keeping the local copy:
+
+```bash
+git rm --cached path/to/file.wpress
+git commit -m "Remove large backup"
+```
+
+After removing the file from the repository, add the pattern to `.gitignore` or
+track it with Git LFS to prevent future commits.
+
 ## License
 
 This project is released under the [MIT License](LICENSE).
