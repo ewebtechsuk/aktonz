@@ -52,3 +52,7 @@ git add .gitattributes
 ```
 
 GitHub blocks files larger than 100 MB unless they are handled with LFS.
+
+## License
+
+This project is released under the [MIT License](LICENSE).
