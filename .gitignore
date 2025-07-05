@@ -2,8 +2,8 @@
 **/wp-content/uploads/
 **/wp-content/cache/
 **/wp-content/ai1wm-backups/
-**/staging2/
-**/staging/
+public_html/staging2/
+public_html/staging/
 # All-in-One WP Migration backups
 *.wpress
 
