@@ -1,0 +1,13 @@
+staging/
+staging2/
+main/
+**/ai1wm-backups/
+**/*.wpress
+**/*.zip
+wp-content/cache/
+wp-content/upgrade/
+*.log
+*.sql
+node_modules/
+vendor/
+aktonz-local-copy/

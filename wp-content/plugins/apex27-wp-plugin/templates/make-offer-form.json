@@ -1,0 +1,49 @@
+{
+  "title": "Make Offer",
+  "fields": [
+    {
+      "type": "text",
+      "name": "name",
+      "label": "Your Name",
+      "required": true
+    },
+    {
+      "type": "email",
+      "name": "email",
+      "label": "Your Email",
+      "required": true
+    },
+    {
+      "type": "text",
+      "name": "phone",
+      "label": "Phone Number",
+      "required": false
+    },
+    {
+      "type": "number",
+      "name": "offer_amount",
+      "label": "Offer Amount",
+      "required": true,
+      "min": 1
+    },
+    {
+      "type": "textarea",
+      "name": "message",
+      "label": "Message",
+      "required": false
+    },
+    {
+      "type": "hidden",
+      "name": "property_title",
+      "label": "Property Title",
+      "default": "{post_title}"
+    }
+  ],
+  "settings": {
+    "submit_label": "Send Offer",
+    "success_message": "Thank you for your offer! We will contact you soon.",
+    "admin_email": "{admin_email}",
+    "admin_email_subject": "New Offer Received",
+    "admin_email_message": "You have received a new offer for {property_title}.\n\nName: {name}\nEmail: {email}\nPhone: {phone}\nOffer Amount: {offer_amount}\nMessage: {message}"
+  }
+}

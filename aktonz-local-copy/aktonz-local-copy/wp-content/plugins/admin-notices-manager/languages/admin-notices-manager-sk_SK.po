@@ -1,0 +1,421 @@
+# Copyright (C) 2020 AdminNoticesManager
+# This file is distributed under the same license as the AdminNoticesManager package.
+msgid ""
+msgstr ""
+"Project-Id-Version: AdminNoticesManager\n"
+"Report-Msgid-Bugs-To: https://wpwhitesecurity.com\n"
+"POT-Creation-Date: \n"
+"PO-Revision-Date: \n"
+"Last-Translator: \n"
+"Language-Team: WP White Security <info@wpwhitesecurity.com>\n"
+"Language: sk\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n>=2 && n<=4 ? 1 : 2);\n"
+"X-Poedit-Basepath: ..\n"
+"X-Poedit-KeywordsList: __;_e;_ex:1,2c;_n:1,2;_n_noop:1,2;_nx:1,2,4c;"
+"_nx_noop:1,2,3c;_x:1,2c;esc_attr__;esc_attr_e;esc_attr_x:1,2c;esc_html__;"
+"esc_html_e;esc_html_x:1,2c\n"
+"X-Poedit-SourceCharset: UTF-8\n"
+"X-Generator: Poedit 3.0.1\n"
+"X-Poedit-SearchPath-0: .\n"
+"X-Poedit-SearchPathExcluded-0: *.js\n"
+
+#: includes/classes/Notices.php:60 includes/functions/core.php:269
+msgid "No admin notices"
+msgstr "Žiadne oznámenia"
+
+#: includes/classes/Pointer.php:23
+msgid "Admin Notices Manager"
+msgstr "Správca admin oznámení"
+
+#: includes/classes/Pointer.php:24
+msgid "From now onward, all the admin notices will be displayed here."
+msgstr ""
+
+#: includes/classes/Pointer.php:40
+msgid "Configure the Admin Notices Manager"
+msgstr ""
+
+#: includes/classes/Pointer.php:41
+msgid ""
+"Configure how the plugin handles different types of admin notices from the "
+"Settings > Admin Notices menu item."
+msgstr ""
+
+#: includes/classes/Settings.php:35
+msgid "hide from the WordPress dashboard and show them in the plugin's popup"
+msgstr "skryť na WordPress nástenke a zobraziť vo vyskakovacom okne pluginu"
+
+#: includes/classes/Settings.php:36
+msgid ""
+"hide them completely (do not show in the WordPress dashboard or in the "
+"plugin's popup)"
+msgstr ""
+"skryť úplne (nezobrazia sa na WordPress nástenke ani vo vyskakovacom okne "
+"pluginu)"
+
+#: includes/classes/Settings.php:37
+msgid ""
+"do not do anything (they will appear on the WordPress dashboard as per usual)"
+msgstr ""
+"žiadne zmeny (oznámenia sa zobrazia na WordPress nástenke ako zvyčajne)"
+
+#: includes/classes/Settings.php:44
+msgid "Success level notices"
+msgstr ""
+
+#: includes/classes/Settings.php:45
+msgid "Error level notices"
+msgstr ""
+
+#: includes/classes/Settings.php:46
+msgid "Warning level notices"
+msgstr ""
+
+#: includes/classes/Settings.php:47
+msgid "Information level notices"
+msgstr ""
+
+#: includes/classes/Settings.php:62
+msgid "Slide in from the right"
+msgstr ""
+
+#: includes/classes/Settings.php:63
+msgid "Popup"
+msgstr ""
+
+#: includes/classes/Settings.php:68
+msgid "Admin Notices"
+msgstr "Admin oznámenia"
+
+#: includes/classes/Settings.php:70
+msgid "Admin notices settings"
+msgstr ""
+
+#: includes/classes/Settings.php:74
+msgid "Standard admin notices"
+msgstr ""
+
+#: includes/classes/Settings.php:78
+msgid "Non-Standard admin notices"
+msgstr ""
+
+#: includes/classes/Settings.php:79
+msgid ""
+"These type of admin notices are typically created by third party plugins and "
+"themes and do not have any severity level. Use the below settings to "
+"configure how the plugin should handle these type of admin notices."
+msgstr ""
+
+#: includes/classes/Settings.php:82
+msgid "No level notices"
+msgstr ""
+
+#: includes/classes/Settings.php:88
+msgid "CSS selector"
+msgstr ""
+
+#: includes/classes/Settings.php:91
+msgid ""
+"Plugin will ignore all notices matching this CSS selector. Use jQuery "
+"compatible CSS selector. You can specify multiple selectors and comma "
+"separate them."
+msgstr ""
+
+#: includes/classes/Settings.php:96 includes/classes/Settings.php:100
+msgid "WordPress system admin notices"
+msgstr ""
+
+#: includes/classes/Settings.php:97
+msgid ""
+"These type of admin notices are used by WordPress to advise you about the "
+"status of specific actions, for example to confirm that the changed settings "
+"were saved, or that a plugin was successfully installed. It is recommended "
+"to let these admin notices appear in the WordPress dashboard."
+msgstr ""
+
+#: includes/classes/Settings.php:108
+msgid "Admin notices popup styling"
+msgstr ""
+
+#: includes/classes/Settings.php:109
+msgid "How do you want ANM to look?"
+msgstr ""
+
+#: includes/classes/Settings.php:112
+msgid "Popup style"
+msgstr ""
+
+#: includes/classes/Settings.php:118
+msgid "Slide in background colour"
+msgstr ""
+
+#: includes/functions/core.php:150
+msgid "Post draft updated."
+msgstr ""
+
+#: includes/functions/core.php:151
+msgid "Post updated."
+msgstr ""
+
+#: includes/functions/core.php:152
+msgid "Page draft updated."
+msgstr ""
+
+#: includes/functions/core.php:153
+msgid "Page updated."
+msgstr ""
+
+#: includes/functions/core.php:154
+msgid "1 post not updated, somebody is editing it."
+msgstr ""
+
+#: includes/functions/core.php:155
+msgid "1 page not updated, somebody is editing it."
+msgstr ""
+
+#: includes/functions/core.php:158
+msgid "Invalid comment ID."
+msgstr ""
+
+#: includes/functions/core.php:159
+msgid "Sorry, you are not allowed to edit comments on this post."
+msgstr ""
+
+#: includes/functions/core.php:160
+msgid "This comment is already approved."
+msgstr ""
+
+#: includes/functions/core.php:161
+msgid "This comment is already in the Trash."
+msgstr ""
+
+#: includes/functions/core.php:162
+msgid "This comment is already marked as spam."
+msgstr ""
+
+#: includes/functions/core.php:165
+msgid "New user created."
+msgstr ""
+
+#: includes/functions/core.php:166
+msgid "User updated."
+msgstr ""
+
+#: includes/functions/core.php:167
+msgid "User deleted."
+msgstr ""
+
+#: includes/functions/core.php:168
+msgid "Changed roles."
+msgstr ""
+
+#: includes/functions/core.php:169
+msgid "The current user&#8217;s role must have user editing capabilities."
+msgstr ""
+
+#: includes/functions/core.php:170
+msgid "Other user roles have been changed."
+msgstr ""
+
+#: includes/functions/core.php:171
+msgid "You can&#8217;t delete the current user."
+msgstr ""
+
+#: includes/functions/core.php:172
+msgid "Other users have been deleted."
+msgstr ""
+
+#: includes/functions/core.php:173
+msgid "User removed from this site."
+msgstr ""
+
+#: includes/functions/core.php:174
+msgid "You can't remove the current user."
+msgstr ""
+
+#: includes/functions/core.php:175
+msgid "Other users have been removed."
+msgstr ""
+
+#: includes/functions/core.php:178
+msgid "The active theme is broken. Reverting to the default theme."
+msgstr ""
+
+#: includes/functions/core.php:179
+msgid "Settings saved and theme activated."
+msgstr ""
+
+#: includes/functions/core.php:180
+msgid "New theme activated."
+msgstr ""
+
+#: includes/functions/core.php:181
+msgid "Theme deleted."
+msgstr ""
+
+#: includes/functions/core.php:182
+msgid "You cannot delete a theme while it has an active child theme."
+msgstr ""
+
+#: includes/functions/core.php:183
+msgid "Theme resumed."
+msgstr ""
+
+#: includes/functions/core.php:184
+msgid ""
+"Theme could not be resumed because it triggered a <strong>fatal error</"
+"strong>."
+msgstr ""
+
+#: includes/functions/core.php:185
+msgid "Theme will be auto-updated."
+msgstr ""
+
+#: includes/functions/core.php:186
+msgid "Theme will no longer be auto-updated."
+msgstr ""
+
+#: includes/functions/core.php:189
+msgid "Plugin activated."
+msgstr ""
+
+#: includes/functions/core.php:190
+msgid "Plugin deactivated."
+msgstr ""
+
+#: includes/functions/core.php:191
+msgid "Plugin downgraded successfully."
+msgstr ""
+
+#: includes/functions/core.php:192
+msgid "Plugin updated successfully."
+msgstr ""
+
+#: includes/functions/core.php:195
+msgid "Settings saved."
+msgstr ""
+
+#: includes/functions/core.php:196
+msgid "Permalink structure updated."
+msgstr ""
+
+#: includes/functions/core.php:197
+#, php-format
+msgid "You should update your %s file now."
+msgstr ""
+
+#: includes/functions/core.php:198
+#, php-format
+msgid "Permalink structure updated. Remove write access on %s file now!"
+msgstr ""
+
+#: includes/functions/core.php:199
+msgid "Privacy Policy page updated successfully."
+msgstr ""
+
+#: includes/functions/core.php:200
+msgid ""
+"The currently selected Privacy Policy page does not exist. Please create or "
+"select a new page."
+msgstr ""
+
+#: includes/functions/core.php:201
+#, php-format
+msgid ""
+"The currently selected Privacy Policy page is in the Trash. Please create or "
+"select a new Privacy Policy page or <a href=\"%s\">restore the current page</"
+"a>."
+msgstr ""
+
+#: includes/functions/core.php:204
+msgid "Sites removed from spam."
+msgstr ""
+
+#: includes/functions/core.php:205
+msgid "Sites marked as spam."
+msgstr ""
+
+#: includes/functions/core.php:206
+msgid "Sites deleted."
+msgstr ""
+
+#: includes/functions/core.php:207
+msgid "Site deleted."
+msgstr ""
+
+#: includes/functions/core.php:208
+msgid "Sorry, you are not allowed to delete that site."
+msgstr ""
+
+#: includes/functions/core.php:209
+msgid "Site archived."
+msgstr ""
+
+#: includes/functions/core.php:210
+msgid "Site unarchived."
+msgstr ""
+
+#: includes/functions/core.php:211
+msgid "Site activated."
+msgstr ""
+
+#: includes/functions/core.php:212
+msgid "Site deactivated."
+msgstr ""
+
+#: includes/functions/core.php:213
+msgid "Site removed from spam."
+msgstr ""
+
+#: includes/functions/core.php:214
+msgid "Site marked as spam."
+msgstr ""
+
+#: includes/functions/core.php:217
+msgid "Unable to initiate confirmation request."
+msgstr ""
+
+#: includes/functions/core.php:218
+msgid "Unable to initiate user privacy confirmation request."
+msgstr ""
+
+#: includes/functions/core.php:219
+msgid ""
+"Unable to add this request. A valid email address or username must be "
+"supplied."
+msgstr ""
+
+#: includes/functions/core.php:220
+msgid "Invalid user privacy action."
+msgstr ""
+
+#: includes/functions/core.php:221
+msgid "Confirmation request sent again successfully."
+msgstr ""
+
+#: includes/functions/core.php:222
+msgid "Confirmation request initiated successfully."
+msgstr ""
+
+#: includes/functions/core.php:268
+msgid "Admin notices"
+msgstr "Admin oznámenia"
+
+#: includes/functions/core.php:270
+msgid "First logged: "
+msgstr ""
+
+#: includes/vendor/jeremyHixon-RationalOptionPages/RationalOptionPages.php:700
+msgid "Field parameter \"title\" is required"
+msgstr ""
+
+#: includes/vendor/jeremyHixon-RationalOptionPages/RationalOptionPages.php:795
+msgid "Page parameter \"page_title\" is required"
+msgstr ""
+
+#: includes/vendor/jeremyHixon-RationalOptionPages/RationalOptionPages.php:857
+msgid "Section parameter \"title\" is required"
+msgstr ""

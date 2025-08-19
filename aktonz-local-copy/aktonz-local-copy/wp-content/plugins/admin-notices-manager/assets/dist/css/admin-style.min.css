@@ -1,0 +1,31 @@
+#wp-admin-bar-anm_notification_count>a{cursor:not-allowed}
+#wp-admin-bar-anm_notification_count.has-data>a{cursor:pointer}
+.anm-notification-counter{background-color:#ca4a1f;border-radius:50% !important;-webkit-box-sizing:border-box !important;box-sizing:border-box !important;font-size:11px !important;height:18px !important;line-height:1.6 !important;min-width:18px;text-align:center;vertical-align:text-bottom;display:inline;padding:4px 7px 4px 6px !important;color:#fff;margin-left:7px !important;opacity:0;-webkit-transition:all .2s ease-in-out !important;transition:all .2s ease-in-out !important}
+.anm-notification-counter>span{line-height:100% !important}
+.anm-notification-counter.display{opacity:1;-webkit-transition:all .2s ease-in-out !important;transition:all .2s ease-in-out !important}
+.anm-pointer .wp-pointer-arrow{left:50%;margin-left:-7px}
+#anm-container-slide-in{padding-top:34px;height:100vh;position:fixed;background:#222;right:-620px;z-index:1000;top:0;-webkit-transition:all .3s ease-in-out;transition:all .3s ease-in-out;width:620px}
+#anm-container-slide-in.show{right:0;-webkit-transition:all .2s ease-in-out;transition:all .2s ease-in-out}
+#anm-container-slide-in .notice,#anm-container-slide-in div.error,#anm-container-slide-in div.updated{padding:1px 12px !important}
+.anm-notice-timestamp{border-top:1px solid #eee;padding:9px 0 10px;font-size:11px;margin-top:14px;display:block}
+.anm-notice-timestamp span{font-style:italic}
+.anm-notice-timestamp a{float:right}
+.anm-notice-timestamp,.anm-notice-hide{padding:4px 0 5px;font-size:11px;margin-top:14px;display:block;overflow:hidden}
+#anm-slide-in-content{max-height:calc(100vh - 100px);overflow-y:auto;direction:ltr;scrollbar-color:#333;scrollbar-width:thin}
+#anm-slide-in-content::-webkit-scrollbar{width:20px}
+#anm-slide-in-content::-webkit-scrollbar-track{background-color:#222;border-radius:100px}
+#anm-slide-in-content::-webkit-scrollbar-thumb{border-radius:100px;border:0;border-left:0;border-right:0;background-color:#333}
+#anm-system-notices .notice,#anm-error-notices .notice,#anm-warning-notices .notice,#anm-success-notices .notice,#anm-information-notices .notice{margin-bottom:15px}
+#anm-system-notices .notice p,#anm-error-notices .notice p,#anm-warning-notices .notice p,#anm-success-notices .notice p,#anm-information-notices .notice p{width:calc(100% - 38px);font-size:13px;line-height:22px}
+#anm-system-notices .notice.is-dismissible,#anm-error-notices .notice.is-dismissible,#anm-warning-notices .notice.is-dismissible,#anm-success-notices .notice.is-dismissible,#anm-information-notices .notice.is-dismissible{padding-right:12px !important}
+#anm-system-notices .notice-addon-available,#anm-error-notices .notice-addon-available,#anm-warning-notices .notice-addon-available,#anm-success-notices .notice-addon-available,#anm-information-notices .notice-addon-available{display:block}
+#anm-system-notices .update-nag,#anm-error-notices .update-nag,#anm-warning-notices .update-nag,#anm-success-notices .update-nag,#anm-information-notices .update-nag{display:block;margin:5px 15px 15px}
+#anm-notice-purged-text{opacity:0;color:green;display:inline-block;font-size:12px;padding:7px 12px;-webkit-transition:all .2s ease-in-out;transition:all .2s ease-in-out}
+#anm-notice-purged-text.visible{opacity:1;-webkit-transition:all .2s ease-in-out;transition:all .2s ease-in-out}
+.settings_page_admin_notices_settings #setting-error-settings_updated+#setting-error-settings_updated{display:none}
+div.updated:not(.hidden,.hide-if-js,.update-message,[aria-hidden="true"],.anm-display-notice,.leave-in-place),div.error:not(.hidden,.hide-if-js,.update-message,[aria-hidden="true"],.anm-display-notice,.leave-in-place),div.notice:not(.hidden,.hide-if-js,.update-message,[aria-hidden="true"],.anm-display-notice,.leave-in-place),#message:not(.hidden,.hide-if-js,.update-message,[aria-hidden="true"],.anm-display-notice,.leave-in-place){display:none !important}
+#anm-container-slide-in div.updated,#anm-container-slide-in div.error,#anm-container-slide-in div.notice,#anm-container-slide-in #message,#TB_ajaxContent div.updated,#TB_ajaxContent div.error,#TB_ajaxContent div.notice,#TB_ajaxContent #message{display:block !important}
+[data-display-notice]{margin-right:10px}
+.anm-display-notice{margin-left:0}
+@media all and (max-width:540px){#anm-container-slide-in{right:-330px;width:330px}
+}

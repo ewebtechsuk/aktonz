@@ -1,0 +1,237 @@
+# Copyright (C) 2025 Melapress
+# This file is distributed under the GPL2.
+msgid ""
+msgstr ""
+"Project-Id-Version: Admin Notices Manager 1.6.0\n"
+"Report-Msgid-Bugs-To: https://wordpress.org/support/plugin/admin-notices-manager\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2025-02-04T15:39:00+00:00\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"X-Generator: WP-CLI 2.10.0\n"
+"X-Domain: admin-notices-manager\n"
+
+#. Plugin Name of the plugin
+#: admin-notices-manager.php
+#: includes/classes/class-pointers.php:84
+msgid "Admin Notices Manager"
+msgstr ""
+
+#. Plugin URI of the plugin
+#. Author URI of the plugin
+#: admin-notices-manager.php
+msgid "https://melapress.com/"
+msgstr ""
+
+#. Description of the plugin
+#: admin-notices-manager.php
+msgid "Better manage admin notices & never miss an important WordPress and developer message."
+msgstr ""
+
+#. Author of the plugin
+#: admin-notices-manager.php
+msgid "Melapress"
+msgstr ""
+
+#: includes/classes/class-notices.php:89
+#: includes/functions/core.php:336
+msgid "No admin notices"
+msgstr ""
+
+#: includes/classes/class-plugin-updated-banner.php:40
+msgid "Admin Notices Manager has been updated to version"
+msgstr ""
+
+#: includes/classes/class-plugin-updated-banner.php:42
+msgid "You are now running the latest version of Admin Notices Manager. To see what's been included in this update, refer to the plugin's release notes and change log where we list all new features, updates, and bug fixes."
+msgstr ""
+
+#: includes/classes/class-plugin-updated-banner.php:44
+msgid "Read the release notes"
+msgstr ""
+
+#: includes/classes/class-plugin-updated-banner.php:237
+msgid "Nonce Verification Failed."
+msgstr ""
+
+#: includes/classes/class-plugin-updated-banner.php:242
+msgid "Complete."
+msgstr ""
+
+#: includes/classes/class-pointers.php:85
+msgid "From now onward, all the admin notices will be displayed here."
+msgstr ""
+
+#: includes/classes/class-pointers.php:88
+msgid "Configure the Admin Notices Manager"
+msgstr ""
+
+#: includes/classes/class-pointers.php:89
+msgid "Configure how the plugin handles different types of admin notices from the Settings > Admin Notices menu item."
+msgstr ""
+
+#: includes/classes/class-settings.php:50
+msgid "Hide from the WordPress dashboard and show them in the plugin's popup"
+msgstr ""
+
+#: includes/classes/class-settings.php:51
+msgid "Hide them completely (do not show in the WordPress dashboard or in the plugin's popup)"
+msgstr ""
+
+#: includes/classes/class-settings.php:52
+msgid "Do not do anything (they will appear on the WordPress dashboard as per usual)"
+msgstr ""
+
+#: includes/classes/class-settings.php:59
+msgid "Success level notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:60
+msgid "Error level notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:61
+msgid "Warning level notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:62
+msgid "Information level notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:77
+msgid "Slide in from the right"
+msgstr ""
+
+#: includes/classes/class-settings.php:78
+msgid "Popup"
+msgstr ""
+
+#: includes/classes/class-settings.php:82
+#: includes/classes/class-settings.php:86
+#: includes/classes/class-settings.php:88
+msgid "Admin notices settings"
+msgstr ""
+
+#: includes/classes/class-settings.php:92
+msgid "Standard admin notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:96
+msgid "Non-Standard admin notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:97
+msgid "These type of admin notices are typically created by third party plugins and themes and do not have any severity level. Use the below settings to configure how the plugin should handle these type of admin notices."
+msgstr ""
+
+#: includes/classes/class-settings.php:100
+msgid "No level notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:106
+msgid "CSS selector"
+msgstr ""
+
+#: includes/classes/class-settings.php:109
+msgid "Plugin will ignore all notices matching this CSS selector. Use jQuery compatible CSS selector. You can specify multiple selectors and comma separate them."
+msgstr ""
+
+#: includes/classes/class-settings.php:114
+#: includes/classes/class-settings.php:118
+msgid "WordPress system admin notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:115
+msgid "These type of admin notices are used by WordPress to advise you about the status of specific actions, for example to confirm that the changed settings were saved, or that a plugin was successfully installed. It is recommended to let these admin notices appear in the WordPress dashboard."
+msgstr ""
+
+#: includes/classes/class-settings.php:126
+msgid "Hiding notifications"
+msgstr ""
+
+#: includes/classes/class-settings.php:127
+msgid "Plugin can hide the notifications from specific users or display them only to certain selected users. Use the below settings to configure this behaviour."
+msgstr ""
+
+#: includes/classes/class-settings.php:130
+msgid "Visibility"
+msgstr ""
+
+#: includes/classes/class-settings.php:136
+msgid "Hide notifications from all users"
+msgstr ""
+
+#: includes/classes/class-settings.php:137
+msgid "Hide notifications only from these users"
+msgstr ""
+
+#: includes/classes/class-settings.php:138
+msgid "Hide notifications to all users but not these"
+msgstr ""
+
+#: includes/classes/class-settings.php:145
+msgid "Admin notices popup styling"
+msgstr ""
+
+#: includes/classes/class-settings.php:146
+msgid "How do you want ANM to look?"
+msgstr ""
+
+#: includes/classes/class-settings.php:149
+msgid "Popup style"
+msgstr ""
+
+#: includes/classes/class-settings.php:155
+msgid "Slide in background colour"
+msgstr ""
+
+#: includes/classes/class-settings.php:162
+msgid "Restore hidden admin notices"
+msgstr ""
+
+#: includes/classes/class-settings.php:163
+msgid "Reset the current list of hidden admin notices from the database so they are displayed again."
+msgstr ""
+
+#: includes/classes/class-settings.php:166
+msgid "Reset list now"
+msgstr ""
+
+#: includes/classes/class-settings.php:339
+msgid "Reset"
+msgstr ""
+
+#: includes/classes/class-settings.php:339
+msgid "Notices restored"
+msgstr ""
+
+#: includes/classes/class-settings.php:362
+msgid "Settings"
+msgstr ""
+
+#: includes/classes/class-settings.php:384
+msgid "select user(s)"
+msgstr ""
+
+#: includes/functions/core.php:335
+msgid "Admin notices"
+msgstr ""
+
+#: includes/functions/core.php:337
+msgid "First logged:"
+msgstr ""
+
+#: includes/functions/core.php:338
+msgid "Hide notice forever"
+msgstr ""
+
+#: includes/functions/core.php:339
+msgid "Hide this notice"
+msgstr ""
+
+#: includes/functions/core.php:340
+msgid "Display notice as normal"
+msgstr ""
