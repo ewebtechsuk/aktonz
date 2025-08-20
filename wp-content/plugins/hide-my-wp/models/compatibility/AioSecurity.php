@@ -29,7 +29,8 @@ class HMWP_Models_Compatibility_AioSecurity extends HMWP_Models_Compatibility_Ab
 		if (defined('AIO_WP_SECURITY_PATH') ) {
 			if (empty($content) ) {
 				nocache_headers();
-				header("HTTP/1.0 503 Service Unavailable");
+                               // Send 403 instead of 503 to avoid service unavailable errors
+                               header('HTTP/1.1 403 Forbidden');
 				remove_action('wp_head', 'head_addons', 7);
 
 				ob_start();
