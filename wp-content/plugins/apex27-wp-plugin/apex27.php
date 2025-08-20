@@ -119,12 +119,21 @@ class Apex27 {
 		return $parts;
 	}
 
-	public function init_rewrite_rules() {
-		add_rewrite_rule("^$this->property_search_slug/?$", 'index.php?apex27_page_name=property-search', 'top');
-		add_rewrite_rule('^property-details/(sales|lettings|new-homes|land|commercial-sales|commercial-lettings)/[^/]+/([0-9]+)/?$', 'index.php?apex27_page_name=property-details&listing_id=$matches[2]', 'top');
+        public function init_rewrite_rules() {
+                add_rewrite_rule("^$this->property_search_slug/?$", 'index.php?apex27_page_name=property-search', 'top');
+                add_rewrite_rule('^property-details/(sales|lettings|new-homes|land|commercial-sales|commercial-lettings)/[^/]+/([0-9]+)/?$', 'index.php?apex27_page_name=property-details&listing_id=$matches[2]', 'top');
+        }
 
-		flush_rewrite_rules();
-	}
+        public static function activate() {
+                $plugin = new self();
+                $plugin->init_rewrite_rules();
+
+                flush_rewrite_rules();
+        }
+
+        public static function deactivate() {
+                flush_rewrite_rules();
+        }
 
 	private function get_plugin_vars() {
 		return ["apex27_page_name"];
@@ -626,6 +635,9 @@ class Apex27 {
 	}
 
 }
+
+register_activation_hook(__FILE__, ['Apex27', 'activate']);
+register_deactivation_hook(__FILE__, ['Apex27', 'deactivate']);
 
 $apex27 = new Apex27();
 
