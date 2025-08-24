@@ -54,3 +54,24 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
+
+      - name: Record deployment marker
+        if: ${{ success() }}
+        run: |
+          echo "[deploy] Writing .deploy-info.json marker with commit $GITHUB_SHA" 
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat > $HOSTINGER_PATH/.deploy-info.json <<'EOF'
+          {\n  \"commit\": \"$GITHUB_SHA\",\n  \"deployed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\n  \"source\": \"github_actions\"\n}\nEOF" || { echo '[warn] Failed to write deploy marker'; exit 1; }
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Post-deploy health check (optional)
+        if: ${{ success() && secrets.PRODUCTION_URL != '' }}
+        run: |
+          URL="${{ secrets.PRODUCTION_URL }}${{ secrets.HEALTHCHECK_PATH || '/' }}"
+            echo "[deploy] Health check: $URL" 
+            curl -I -L --max-time 20 --retry 2 --retry-delay 3 "$URL" | sed 's/^/[health]/' || { echo '[error] Health check failed'; exit 1; }
+        env:
+          HEALTHCHECK_PATH: ${{ secrets.HEALTHCHECK_PATH || '' }}
