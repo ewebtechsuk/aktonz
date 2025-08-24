@@ -1,0 +1,51 @@
+name: Deploy to Hostinger
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    name: Sync files to Hostinger
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+
+      - name: Add Host to known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_HOST" >> ~/.ssh/known_hosts
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+
+      - name: Rsync to server
+        run: |
+          RSYNC_EXCLUDES=(
+            ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade"
+            "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
+          )
+          EXCLUDE_ARGS=""; for e in "${RSYNC_EXCLUDES[@]}"; do EXCLUDE_ARGS+=" --exclude=$e"; done
+          rsync -az --delete $EXCLUDE_ARGS ./ $HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Optional - Run WP cache flush
+        if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' }}
+        run: |
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cd $HOSTINGER_PATH && wp cache flush || true"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
