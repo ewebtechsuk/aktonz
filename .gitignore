@@ -13,3 +13,14 @@ vendor/
 aktonz-local-copy/
 wp-config.php
 aktonz-local-copy/*/wp-config.php
+
+wp-config-local.php
+.DS_Store
+**/*.off/
+**/*disabled*/
+wp-content/object-cache.php.disabled
+wp-content/mu-plugins.disabled/
+wp-content/plugins.disabled/
+wp-content/plugins.off/
+wp-content/themes.off/
+.devcontainer/
