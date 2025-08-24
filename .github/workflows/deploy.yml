@@ -32,7 +32,12 @@ jobs:
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
           )
           EXCLUDE_ARGS=""; for e in "${RSYNC_EXCLUDES[@]}"; do EXCLUDE_ARGS+=" --exclude=$e"; done
-          rsync -az --delete $EXCLUDE_ARGS ./ $HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH
+          echo "[deploy] Connectivity test (nc)..." || true
+          command -v nc >/dev/null && nc -vz -w5 "$HOSTINGER_SSH_HOST" "$HOSTINGER_SSH_PORT" || echo "[warn] nc not available or port check failed (may still work)"
+          echo "[deploy] Connectivity test (ssh banner)..." || true
+          ssh -o BatchMode=yes -o ConnectTimeout=10 -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] ssh ok' || { echo "[error] SSH connection failed. Verify HOSTINGER_* secrets, firewall, and that the key is installed."; exit 1; }
+          echo "[deploy] Starting rsync..." 
+          rsync -az -e "ssh -p $HOSTINGER_SSH_PORT" --delete $EXCLUDE_ARGS ./ "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH" || { echo "[error] rsync failed"; exit 1; }
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
