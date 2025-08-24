@@ -24,3 +24,7 @@ wp-content/plugins.disabled/
 wp-content/plugins.off/
 wp-content/themes.off/
 .devcontainer/
+
+# Local deploy keys
+deploy_aktonz_key
+deploy_aktonz_key.pub
