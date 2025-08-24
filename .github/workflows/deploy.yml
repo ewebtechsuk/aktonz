@@ -68,10 +68,17 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Post-deploy health check (optional)
-        if: ${{ success() && secrets.PRODUCTION_URL != '' }}
+        if: ${{ success() && env.PRODUCTION_URL != '' }}
         run: |
-          URL="${{ secrets.PRODUCTION_URL }}${{ secrets.HEALTHCHECK_PATH || '/' }}"
-            echo "[deploy] Health check: $URL" 
-            curl -I -L --max-time 20 --retry 2 --retry-delay 3 "$URL" | sed 's/^/[health]/' || { echo '[error] Health check failed'; exit 1; }
+          PATH_PART="${HEALTHCHECK_PATH:-/}"
+          # Ensure path part starts with /
+          case "$PATH_PART" in
+            /*) : ;;
+            *) PATH_PART="/$PATH_PART" ;;
+          esac
+          URL="${PRODUCTION_URL%/}$PATH_PART"
+          echo "[deploy] Health check: $URL" 
+          curl -I -L --max-time 20 --retry 2 --retry-delay 3 "$URL" | sed 's/^/[health]/' || { echo '[error] Health check failed'; exit 1; }
         env:
-          HEALTHCHECK_PATH: ${{ secrets.HEALTHCHECK_PATH || '' }}
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HEALTHCHECK_PATH: ${{ secrets.HEALTHCHECK_PATH }}
