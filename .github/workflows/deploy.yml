@@ -51,13 +51,13 @@ jobs:
           echo "[audit-pre] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
           MISS=0
           for d in "${EXPECT_DIRS[@]}"; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]"; then
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]"; then
               echo "[audit-pre] OK dir: $d"
             else
               echo "[audit-pre] MISSING dir: $d"; MISS=$((MISS+1)); fi
           done
           for f in "${EXPECT_FILES[@]}"; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/$f' ]"; then
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/$f\" ]"; then
               echo "[audit-pre] OK file: $f"
             else
               echo "[audit-pre] MISSING file: $f"; MISS=$((MISS+1)); fi
@@ -193,7 +193,7 @@ jobs:
           EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
           MISS=0
           for d in "${EXPECT_DIRS[@]}"; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]"; then
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]"; then
               echo "[audit-post] OK dir: $d"
             else
               echo "[audit-post] MISSING dir: $d"; MISS=$((MISS+1)); fi
