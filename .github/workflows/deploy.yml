@@ -235,36 +235,36 @@ jobs:
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/object-cache.php' ] && grep -qi litespeed '$HOSTINGER_PATH/wp-content/object-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/object-cache.php' '$HOSTINGER_PATH/wp-content/object-cache.php.disabled' && echo '[dropins] Disabled object-cache.php (LiteSpeed)'; else echo '[dropins] object-cache.php absent or no LiteSpeed signature'; fi" || true
             # advanced-cache.php handling
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' ]; then if grep -qi litespeed '$HOSTINGER_PATH/wp-content/advanced-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' '$HOSTINGER_PATH/wp-content/advanced-cache.php.disabled' && echo '[dropins] Renamed advanced-cache.php -> advanced-cache.php.disabled'; else echo '[dropins] advanced-cache.php present but no LiteSpeed signature; leaving intact'; fi; else echo '[dropins] No advanced-cache.php present'; fi" || true
-            # Robust WP_CACHE define neutralization
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
-              ROOT_CFG=\"$HOSTINGER_PATH/wp-config.php\"
-              PARENT_CFG=\"$(dirname "$HOSTINGER_PATH")/wp-config.php\"
-              CFG=\"\"
-              if [ -f \"$ROOT_CFG\" ]; then CFG=\"$ROOT_CFG\"; elif [ -f \"$PARENT_CFG\" ]; then CFG=\"$PARENT_CFG\"; else
-                BASE_DIR=\"$(dirname "$HOSTINGER_PATH")\"
-                CFG=$(find \"$BASE_DIR\" -maxdepth 4 -type f -name wp-config.php 2>/dev/null | head -n1 || true)
-              fi
-              if [ -z \"$CFG\" ] || [ ! -f \"$CFG\" ]; then
-                echo \"[dropins] wp-config.php not found for WP_CACHE neutralization (searched root, parent, heuristic)\"; exit 0
-              fi
-              echo \"[dropins] Using config for WP_CACHE neutralization: $CFG\"
-              # Replace any true value
-              if grep -Eq \"define[(][\\'\"]WP_CACHE[\\'\"],[[:space:]]*true\" \"$CFG\"; then
-                sed -i.bak -E \"s/define[(]([\\'\"]WP_CACHE[\\'\"]),[[:space:]]*true[[:space:]]*[)]/define(\1, false) \/\/ auto-disabled by CI/\" \"$CFG\" && echo \"[dropins] Replaced WP_CACHE true -> false\"
-              fi
-              # Ensure a false define exists (append if still absent)
-              if ! grep -Eq \"define[(][\\'\"]WP_CACHE[\\'\"].*\" \"$CFG\"; then
-                printf '\n// Added by CI to ensure caching disabled while LiteSpeed inactive\nif (!defined(\\'WP_CACHE\\')) { define(\\'WP_CACHE\\', false); }\n' >> \"$CFG\"
-                echo \"[dropins] Appended WP_CACHE false define\"
+            # Robust WP_CACHE define neutralization (refactored to avoid nested quoting issues)
+            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
+            PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
+            CFG=""
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then
+              CFG="$ROOT_CFG"
+            elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then
+              CFG="$PARENT_CFG"
+            else
+              # Heuristic search (remote)
+              SEARCH_BASE="$(dirname "$HOSTINGER_PATH")"
+              CFG=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find '$SEARCH_BASE' -maxdepth 4 -type f -name wp-config.php 2>/dev/null | head -n1" || true)
+            fi
+            if [ -z "$CFG" ]; then
+              echo "[dropins] wp-config.php not found for WP_CACHE neutralization (searched root, parent, heuristic)";
+            else
+              echo "[dropins] Using config for WP_CACHE neutralization: $CFG"
+              # Replace any true -> false
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -Eq \"define[(]['\"']WP_CACHE['\"'], *true\" '$CFG' && sed -i.bak -E \"s/define[(](['\"']WP_CACHE['\"']), *true *\)/define(\1, false) \\/\\/ auto-disabled by CI/\" '$CFG' && echo '[dropins] Replaced WP_CACHE true -> false' || true" || true
+              # Ensure define exists and is false
+              EXISTS=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define[(]['\"']WP_CACHE['\"']\" '$CFG' >/dev/null && echo yes || echo no" || echo no)
+              if [ "$EXISTS" = "no" ]; then
+                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '\n// Added by CI to ensure caching disabled while LiteSpeed inactive\nif (!defined(\\''WP_CACHE\\'')) { define(\\''WP_CACHE\\'', false); }\n' >> '$CFG' && echo '[dropins] Appended WP_CACHE false define'" || true
               else
-                # If define exists but not explicitly false (e.g., variable), we leave it; earlier sed handles 'true'.
-                if grep -Eq \"define[(][\\'\"]WP_CACHE[\\'\"],[[:space:]]*false\" \"$CFG\"; then
-                  echo \"[dropins] WP_CACHE already false\"
-                else
-                  echo \"[dropins] WP_CACHE define present (non-true, non-false replacement not attempted)\"
-                fi
+                # If define present but not explicitly false, report status
+                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -Eq \"define[(]['\"']WP_CACHE['\"'], *false\" '$CFG' && echo '[dropins] WP_CACHE already false' || echo '[dropins] WP_CACHE define present (non-true/non-false pattern left unchanged)'" || true
               fi
-            '" || true
+              # Show final line(s) containing WP_CACHE for verification
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n \"WP_CACHE\" '$CFG' | sed 's/^/[dropins][cfg]/' || true" || true
+            fi
           else
             echo "[dropins] litespeed-cache.disabled not present; plugin likely still active. (If fatal persists, add litespeed-cache to disable list or manually remove directory.)"
           fi
