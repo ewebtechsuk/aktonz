@@ -40,36 +40,44 @@ jobs:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
 
-      - name: Remote audit (inventory critical paths)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        id: remote_audit
+      - name: Pre-audit (inventory critical paths)
+        id: pre_audit
         run: |
-          echo "[audit] Starting remote audit (audit input=${{ github.event.inputs.audit }})"
-          if [ -z "$HOSTINGER_PATH" ]; then echo "[audit] HOSTINGER_PATH secret missing"; exit 1; fi
+          echo "[audit-pre] Starting pre-audit (event=${GITHUB_EVENT_NAME} audit_input=${AUDIT_INPUT:-n/a})"
+          if [ -z "$HOSTINGER_PATH" ]; then echo "[audit-pre] HOSTINGER_PATH secret missing"; exit 1; fi
           EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
           EXPECT_FILES=(index.php wp-load.php)
-          ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit] SSH failed"; exit 1; }
-          echo "[audit] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
+          ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit-pre] SSH failed"; exit 1; }
+          echo "[audit-pre] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
           MISS=0
           for d in "${EXPECT_DIRS[@]}"; do
             if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]"; then
-              echo "[audit] OK dir: $d"
+              echo "[audit-pre] OK dir: $d"
             else
-              echo "[audit] MISSING dir: $d"; MISS=$((MISS+1)); fi
+              echo "[audit-pre] MISSING dir: $d"; MISS=$((MISS+1)); fi
           done
           for f in "${EXPECT_FILES[@]}"; do
             if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/$f' ]"; then
-              echo "[audit] OK file: $f"
+              echo "[audit-pre] OK file: $f"
             else
-              echo "[audit] MISSING file: $f"; MISS=$((MISS+1)); fi
+              echo "[audit-pre] MISSING file: $f"; MISS=$((MISS+1)); fi
           done
           # Try to tail a recent PHP error log if present
           for cand in php-error.log debug.log error_log; do
             if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$cand' ]"; then
-              echo "[audit] Tail of wp-content/$cand:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break; fi
+              echo "[audit-pre] Tail of wp-content/$cand:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break; fi
           done
-          echo "[audit] Missing count: $MISS"
+          echo "[audit-pre] Missing count: $MISS"
           echo "missing_count=$MISS" >> $GITHUB_OUTPUT
+          if [ "$MISS" -gt 0 ]; then
+            echo "[audit-pre] WARNING: $MISS required path(s) missing.";
+          fi
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          AUDIT_INPUT: ${{ github.event.inputs.audit }}
 
       - name: Stop after audit (audit-only)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.audit == 'true' }}
@@ -177,3 +185,23 @@ jobs:
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
           HEALTHCHECK_PATH: ${{ secrets.HEALTHCHECK_PATH }}
+
+      - name: Post-audit (verify after sync)
+        if: ${{ success() && github.event.inputs.audit != 'true' }}
+        run: |
+          echo "[audit-post] Verifying critical directories after deployment"
+          EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
+          MISS=0
+          for d in "${EXPECT_DIRS[@]}"; do
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]"; then
+              echo "[audit-post] OK dir: $d"
+            else
+              echo "[audit-post] MISSING dir: $d"; MISS=$((MISS+1)); fi
+          done
+          if [ "$MISS" -gt 0 ]; then
+            echo "[audit-post] WARNING: $MISS directory(ies) still missing. Restore from backup before enabling delete."; fi
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
