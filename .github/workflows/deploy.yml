@@ -44,10 +44,11 @@ jobs:
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
           )
           
-          # Guard: detect accidental self-nested duplicate directories (e.g., dir/dir) and exclude them automatically
-          SELF_NESTED=$(find . -type d -regextype posix-extended -regex '.*/([^/]+)/\1$' | sed 's#^./##' | grep -v '^.git' || true)
+          # Guard: detect ONLY top-level accidental self-nested duplicate directories (./name/name) to exclude
+          # This avoids excluding legitimate vendor paths like twig/twig inside plugins.
+          SELF_NESTED=$(find . -maxdepth 2 -mindepth 2 -type d -regextype posix-extended -regex './([^/]+)/\1$' | sed 's#^./##' | grep -v '^.git' || true)
           if [ -n "$SELF_NESTED" ]; then
-            echo "[guard] Detected self-nested duplicate directories; they will be excluded from deployment:" 
+            echo "[guard] Detected top-level self-nested duplicate directories; excluding from deployment:" 
             echo "$SELF_NESTED" | sed 's/^/  - /'
             while IFS= read -r d; do
               RSYNC_EXCLUDES+=("$d")
@@ -84,8 +85,11 @@ jobs:
         if: ${{ success() }}
         run: |
           echo "[deploy] Writing .deploy-info.json marker with commit $GITHUB_SHA" 
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat > $HOSTINGER_PATH/.deploy-info.json <<'EOF'
-          {\n  \"commit\": \"$GITHUB_SHA\",\n  \"deployed_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\n  \"source\": \"github_actions\"\n}\nEOF" || { echo '[warn] Failed to write deploy marker'; exit 1; }
+          COMMIT="$GITHUB_SHA"
+          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          JSON=$(printf '{"commit":"%s","deployed_at":"%s","source":"github_actions"}' "$COMMIT" "$STAMP")
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s' '$JSON' > '$HOSTINGER_PATH/.deploy-info.json.tmp' && mv '$HOSTINGER_PATH/.deploy-info.json.tmp' '$HOSTINGER_PATH/.deploy-info.json'" \
+            || { echo '[warn] Failed to write deploy marker'; exit 1; }
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
