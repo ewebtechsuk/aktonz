@@ -221,8 +221,15 @@ jobs:
           # Determine if LiteSpeed plugin is disabled (directory renamed) or absent
           LSP_ORIG="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
           LSP_DISABLED="$LSP_ORIG.disabled"
-          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_DISABLED' ] && [ ! -d '$LSP_ORIG' ]"; then
-            echo "[dropins] LiteSpeed appears disabled (found litespeed-cache.disabled). Checking drop-ins..."
+          # Treat plugin as disabled if the .disabled directory exists; if both exist, force-renaming original copy to eliminate activation.
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_DISABLED' ]"; then
+            # Conflict: both original and disabled present -> force rename original to prevent load.
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_ORIG' ]"; then
+              TS=$(date +%s)
+              echo "[dropins] Conflict: both litespeed-cache and litespeed-cache.disabled exist. Force-renaming active copy -> litespeed-cache.disabled.$TS"
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mv '$LSP_ORIG' '$LSP_ORIG.disabled.$TS'" || echo "[dropins][warn] Force rename failed (permissions?)"
+            fi
+            echo "[dropins] LiteSpeed treated as disabled (litespeed-cache.disabled present). Neutralizing drop-ins..."
             # object-cache.php may still reference LiteSpeed classes
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/object-cache.php' ] && grep -qi litespeed '$HOSTINGER_PATH/wp-content/object-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/object-cache.php' '$HOSTINGER_PATH/wp-content/object-cache.php.disabled' && echo '[dropins] Disabled object-cache.php (LiteSpeed)'; else echo '[dropins] object-cache.php absent or no LiteSpeed signature'; fi" || true
             # advanced-cache.php handling
@@ -230,7 +237,7 @@ jobs:
             # WP_CACHE define neutralization
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "CFG='$HOSTINGER_PATH/wp-config.php'; if [ ! -f \"$CFG\" ]; then CFG='$(dirname "$HOSTINGER_PATH")/wp-config.php'; fi; if [ -f \"$CFG\" ]; then if grep -q WP_CACHE \"$CFG\"; then sed -i.bak \"s/define('WP_CACHE',[[:space:]]*true)/define('WP_CACHE', false) \\\/\\/ auto-disabled by CI/\" \"$CFG\" && echo '[dropins] Ensured WP_CACHE false in wp-config.php'; else echo '[dropins] WP_CACHE define not found or already false'; fi; else echo '[dropins] wp-config.php not found for WP_CACHE neutralization'; fi" || true
           else
-            echo "[dropins] LiteSpeed plugin not detected as disabled (either still active or never installed); skipping drop-in neutralization"
+            echo "[dropins] litespeed-cache.disabled not present; plugin likely still active. (If fatal persists, add litespeed-cache to disable list or manually remove directory.)"
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
