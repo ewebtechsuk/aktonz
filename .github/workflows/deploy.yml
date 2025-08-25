@@ -265,25 +265,21 @@ jobs:
             # 2. Remove any prior CI comment lines and any WP_CACHE defines (case-insensitive)
             # 3. Append a single managed define block (idempotent)
             # 4. Show FINAL lines (should be exactly one WP_CACHE define)
-            if [ ! -s "$CFG" ]; then
-              echo "[dropins][cfg] Target file empty or inaccessible: $CFG";
-            else
-              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "FILE=\"$CFG\"; \
-                echo '[dropins][cfg] Target file:' \"$CFG\"; \
-                echo '[dropins][cfg] BEFORE:'; grep -n -i WP_CACHE \"$CFG\" || echo '[dropins][cfg] (none)'; \
-                sed -i -E '/^[[:space:]]*\\/\\/[[:space:]]+(Managed|Added) by CI/d' \"$CFG\"; \
-                sed -i -E '/define[[:space:]]*\([[:space:]]*\"WP_CACHE\"/Id' \"$CFG\"; \
-                echo '[dropins][cfg] AFTER CLEAN (should be none):'; grep -n -i WP_CACHE \"$CFG\" || echo '[dropins][cfg] (none)'; \
-                printf '%s\n%s\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> \"$CFG\"; \
-                # Safety: if somehow multiple lines exist, keep only the last occurrence to avoid drift
-                COUNT=$(grep -i WP_CACHE \"$CFG\" | wc -l | tr -d ' '); \
-                if [ \"$COUNT\" -gt 1 ]; then \
-                  tac \"$CFG\" | awk 'BEGIN{IGNORECASE=1} !found && /WP_CACHE/ {print; found=1; next} {print}' | tac > \"$CFG.tmp\" && mv \"$CFG.tmp\" \"$CFG\"; \
-                  echo '[dropins][cfg] Deduplicated extra WP_CACHE lines'; \
-                fi; \
-                echo '[dropins][cfg] FINAL:'; grep -n -i WP_CACHE \"$CFG\" || echo '[dropins][cfg] (unexpected none)' \
-              " || echo "[dropins][cfg] Remote SSH command failed"
-            fi
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "FILE=\"$CFG\"; \
+              if [ ! -s \"$CFG\" ]; then echo '[dropins][cfg] Target file empty or inaccessible:' \"$CFG\"; exit 0; fi; \
+              echo '[dropins][cfg] Target file:' \"$CFG\"; \
+              echo '[dropins][cfg] BEFORE:'; grep -n -i WP_CACHE \"$CFG\" || echo '[dropins][cfg] (none)'; \
+              sed -i -E '/^[[:space:]]*\\/\\/[[:space:]]+(Managed|Added) by CI/d' \"$CFG\"; \
+              sed -i -E '/define[[:space:]]*\\([[:space:]]*\"WP_CACHE\"/Id' \"$CFG\"; \
+              echo '[dropins][cfg] AFTER CLEAN (should be none):'; grep -n -i WP_CACHE \"$CFG\" || echo '[dropins][cfg] (none)'; \
+              printf '%s\\n%s\\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> \"$CFG\"; \
+              COUNT=$(grep -i WP_CACHE \"$CFG\" | wc -l | tr -d ' '); \
+              if [ \"$COUNT\" -gt 1 ]; then \
+                tac \"$CFG\" | awk 'BEGIN{IGNORECASE=1} !found && /WP_CACHE/ {print; found=1; next} {print}' | tac > \"$CFG.tmp\" && mv \"$CFG.tmp\" \"$CFG\"; \
+                echo '[dropins][cfg] Deduplicated extra WP_CACHE lines'; \
+              fi; \
+              echo '[dropins][cfg] FINAL:'; grep -n -i WP_CACHE \"$CFG\" || echo '[dropins][cfg] (unexpected none)' \
+            " || echo "[dropins][cfg] Remote SSH command failed"
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
