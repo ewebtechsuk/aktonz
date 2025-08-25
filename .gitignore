@@ -11,6 +11,7 @@ wp-content/upgrade/
 node_modules/
 vendor/
 aktonz-local-copy/
+aktonz-local-copy/aktonz-local-copy/
 wp-config.php
 aktonz-local-copy/*/wp-config.php
 

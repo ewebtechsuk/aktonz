@@ -27,10 +27,24 @@ jobs:
 
       - name: Rsync to server
         run: |
+          # Base rsync excludes
           RSYNC_EXCLUDES=(
             ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade"
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
           )
+          
+          # Guard: detect accidental self-nested duplicate directories (e.g., dir/dir) and exclude them automatically
+          SELF_NESTED=$(find . -type d -regextype posix-extended -regex '.*/([^/]+)/\1$' | sed 's#^./##' | grep -v '^.git' || true)
+          if [ -n "$SELF_NESTED" ]; then
+            echo "[guard] Detected self-nested duplicate directories; they will be excluded from deployment:" 
+            echo "$SELF_NESTED" | sed 's/^/  - /'
+            while IFS= read -r d; do
+              RSYNC_EXCLUDES+=("$d")
+            done <<< "$SELF_NESTED"
+          fi
+
+          # Extra safety: never deploy nested aktonz-local-copy copies
+          RSYNC_EXCLUDES+=("aktonz-local-copy/aktonz-local-copy")
           EXCLUDE_ARGS=""; for e in "${RSYNC_EXCLUDES[@]}"; do EXCLUDE_ARGS+=" --exclude=$e"; done
           echo "[deploy] Connectivity test (nc)..." || true
           command -v nc >/dev/null && nc -vz -w5 "$HOSTINGER_SSH_HOST" "$HOSTINGER_SSH_PORT" || echo "[warn] nc not available or port check failed (may still work)"
