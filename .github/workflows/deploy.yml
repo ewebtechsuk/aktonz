@@ -51,7 +51,11 @@ jobs:
             echo "[audit-pre] Trimmed HOSTINGER_PATH -> '$CLEAN_PATH' (raw had trailing whitespace)"
           fi
           HOSTINGER_PATH="$CLEAN_PATH"
-          EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
+          # Distinguish required vs optional dirs. "core" and "storage" were previously treated as required
+          # but they are not standard WordPress core directories; treat them as optional so their absence
+          # doesn't inflate the missing count.
+          REQUIRED_DIRS=(wp-admin wp-includes wp-content)
+          OPTIONAL_DIRS=(core storage)
           EXPECT_FILES=(index.php wp-load.php)
           ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit-pre] SSH failed"; exit 1; }
           echo "[audit-pre] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
@@ -59,7 +63,8 @@ jobs:
           REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'") || REMOTE_LIST=""
           printf '%s' "$REMOTE_LIST" > remote_listing.txt
           echo "[audit-pre][debug] Remote path bytes:"; printf '%s' "$HOSTINGER_PATH" | od -An -tx1 | sed 's/^/[hex]/'
-          for d in "${EXPECT_DIRS[@]}"; do
+          # Required directories
+          for d in "${REQUIRED_DIRS[@]}"; do
             if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
               echo "[audit-pre] OK dir(listing): $d"
             else
@@ -69,6 +74,18 @@ jobs:
               else
                 echo "[audit-pre] MISSING dir: $d"; MISS=$((MISS+1));
                 ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -ld '$HOSTINGER_PATH' || true" | sed 's/^/[audit-pre][parent]/'
+              fi
+            fi
+          done
+          # Optional directories (informational only)
+          for d in "${OPTIONAL_DIRS[@]}"; do
+            if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
+              echo "[audit-pre] OK optional dir(listing): $d"
+            else
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
+                echo "[audit-pre] OK optional dir(test): $d"
+              else
+                echo "[audit-pre] OPTIONAL dir missing (ignored): $d"
               fi
             fi
           done
@@ -221,10 +238,11 @@ jobs:
           echo "[audit-post] Verifying critical directories after deployment"
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
-          EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
+          REQUIRED_DIRS=(wp-admin wp-includes wp-content)
+            OPTIONAL_DIRS=(core storage)
           MISS=0
           REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'") || REMOTE_LIST=""
-          for d in "${EXPECT_DIRS[@]}"; do
+          for d in "${REQUIRED_DIRS[@]}"; do
             if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
               echo "[audit-post] OK dir(listing): $d"
             else
@@ -234,8 +252,18 @@ jobs:
                 echo "[audit-post] MISSING dir: $d"; MISS=$((MISS+1)); fi
             fi
           done
+          for d in "${OPTIONAL_DIRS[@]}"; do
+            if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
+              echo "[audit-post] OK optional dir(listing): $d"
+            else
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
+                echo "[audit-post] OK optional dir(test): $d"
+              else
+                echo "[audit-post] OPTIONAL dir missing (ignored): $d"; fi
+            fi
+          done
           if [ "$MISS" -gt 0 ]; then
-            echo "[audit-post] WARNING: $MISS directory(ies) still missing. Restore from backup before enabling delete."; fi
+            echo "[audit-post] WARNING: $MISS required directory(ies) missing. Restore from backup before enabling delete."; fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
