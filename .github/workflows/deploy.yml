@@ -42,6 +42,7 @@ jobs:
           RSYNC_EXCLUDES=(
             ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade"
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
+            "aktonz-local-copy" # local backup snapshot, never deploy
           )
 
           # Exclude remote-only or dynamically generated directories that are not tracked in the repo but required in production.
