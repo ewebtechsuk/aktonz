@@ -260,8 +260,16 @@ jobs:
             echo "[dropins] wp-config.php not found (cannot enforce WP_CACHE)";
           else
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "awk 'BEGIN{IGNORECASE=1}{ if (\$0 ~ /define[[:space:]]*\(/ && \$0 ~ /WP_CACHE[\"\']/ && \$0 !~ /WP_CACHE_KEY_SALT/) next; print }' '$CFG' > '$CFG.ci.tmp' && mv '$CFG.ci.tmp' '$CFG'" || true
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s\\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> '$CFG'" || true
+            # Remove any previous CI cache-disable comments and all WP_CACHE defines (except WP_CACHE_KEY_SALT) then append a single clean define
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "awk 'BEGIN{IGNORECASE=1} {
+              if (
+                $0 ~ /^\/\/ Managed by CI:/ ||
+                $0 ~ /^\/\/ Added by CI/ ) next;
+              line=tolower($0);
+              if (line ~ /define[[:space:]]*\(.*wp_cache/ && line !~ /wp_cache_key_salt/) next;
+              print;
+            }' '$CFG' > '$CFG.ci.tmp' && mv '$CFG.ci.tmp' '$CFG'" || true
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s\\n%s\\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> '$CFG'" || true
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n WP_CACHE '$CFG'" | sed 's/^/[dropins][cfg]/' || true
           fi
         env:
