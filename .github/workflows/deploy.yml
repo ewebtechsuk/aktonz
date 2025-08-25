@@ -165,23 +165,94 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           AUDIT_INPUT: ${{ github.event.inputs.audit }}
 
-      - name: Disable requested plugins (rename folders)
-        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.disable_plugins != '' }}
+      - name: List remote plugins (debug)
+        if: ${{ github.event.inputs.audit != 'true' }}
         run: |
-          LIST="$DISABLE_PLUGINS"
+          echo "[plugins-list] Listing remote plugin directories to verify slugs";
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A \"$HOSTINGER_PATH/wp-content/plugins\" 2>/dev/null" | sed 's/^/[plugins-list]/' || echo "[plugins-list] Unable to list remote plugins"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Disable requested plugins (rename folders)
+        # Allow disabling via either manual input OR repository secret DISABLE_PLUGINS (works on push events)
+        if: ${{ github.event.inputs.audit != 'true' && (github.event.inputs.disable_plugins != '' || secrets.DISABLE_PLUGINS != '') }}
+        run: |
+          # Priority: manual workflow_dispatch input > secret fallback
+            if [ -n "$DISABLE_PLUGINS_INPUT" ]; then
+              LIST="$DISABLE_PLUGINS_INPUT"
+              SOURCE="input"
+            else
+              LIST="$DISABLE_PLUGINS_SECRET"
+              SOURCE="secret"
+            fi
+          echo "[plugins] Source=$SOURCE List=$LIST"
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           IFS=',' read -r -a PLUGS <<<"$LIST"
-          echo "[plugins] Disabling: $LIST"
           for p in "${PLUGS[@]}"; do
-            p=$(echo "$p" | xargs) # trim
+            p=$(echo "$p" | xargs) # trim whitespace
             [ -z "$p" ] && continue
+            case "$p" in 
+              .*|*/*) echo "[plugins] Skip invalid slug '$p'"; continue;;
+            esac
             SRC="$HOSTINGER_PATH/wp-content/plugins/$p"
             DST="$SRC.disabled"
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -d '$SRC' ]; then if [ -d '$DST' ]; then echo '[plugins] Already disabled: $p'; else mv '$SRC' '$DST' && echo '[plugins] Disabled $p'; fi; else echo '[plugins] Not found: $p'; fi" || true
           done
         env:
-          DISABLE_PLUGINS: ${{ github.event.inputs.disable_plugins }}
+          DISABLE_PLUGINS_INPUT: ${{ github.event.inputs.disable_plugins }}
+          DISABLE_PLUGINS_SECRET: ${{ secrets.DISABLE_PLUGINS }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Neutralize cache drop-ins if LiteSpeed disabled
+        if: ${{ github.event.inputs.audit != 'true' }}
+        run: |
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          # Determine if LiteSpeed plugin is disabled (directory renamed) or absent
+          LSP_ORIG="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
+          LSP_DISABLED="$LSP_ORIG.disabled"
+          CHECK_CMD=''
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_DISABLED' ] && [ ! -d '$LSP_ORIG' ]"; then
+            echo "[dropins] LiteSpeed appears disabled (found litespeed-cache.disabled). Checking drop-ins..."
+            # advanced-cache.php may still reference LiteSpeed classes; rename to advanced-cache.php.disabled to prevent include.
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
+              AC=\"$HOSTINGER_PATH/wp-content/advanced-cache.php\"
+              if [ -f \"$HOSTINGER_PATH/wp-content/object-cache.php\" ]; then
+                if grep -qi litespeed \"$HOSTINGER_PATH/wp-content/object-cache.php\"; then
+                  mv -f \"$HOSTINGER_PATH/wp-content/object-cache.php\" \"$HOSTINGER_PATH/wp-content/object-cache.php.disabled\" && echo \"[dropins] Disabled object-cache.php (LiteSpeed)\" || true
+                fi
+              fi
+              if [ -f \"$AC\" ]; then
+                if grep -qi litespeed \"$AC\"; then
+                  mv -f \"$AC\" \"$AC.disabled\" && echo \"[dropins] Renamed advanced-cache.php -> advanced-cache.php.disabled\" || true
+                else
+                  echo \"[dropins] advanced-cache.php present but no LiteSpeed signature; leaving intact\"
+                fi
+              else
+                echo \"[dropins] No advanced-cache.php present\"
+              fi
+            '" || true
+            # Attempt to neutralize WP_CACHE define in wp-config.php if it still forces caching
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
+              CFG=\"$HOSTINGER_PATH/wp-config.php\"
+              if [ ! -f \"$CFG\" ]; then CFG=\"$(dirname $HOSTINGER_PATH)/wp-config.php\"; fi
+              if [ -f \"$CFG\" ]; then
+                if grep -q "WP_CACHE" \"$CFG\"; then
+                  sed -i.bak -E "s/define\( *'WP_CACHE' *, *true *\)/define('WP_CACHE', false) \/\/ auto-disabled by CI/g" \"$CFG\" && echo \"[dropins] Ensured WP_CACHE false in wp-config.php\" || true
+                fi
+              fi
+            '" || true
+          else
+            echo "[dropins] LiteSpeed plugin not detected as disabled (either still active or never installed); skipping drop-in neutralization"
+          fi
+        env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
