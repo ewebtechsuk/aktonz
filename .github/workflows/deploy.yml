@@ -85,11 +85,26 @@ jobs:
         if: ${{ success() }}
         run: |
           echo "[deploy] Writing .deploy-info.json marker with commit $GITHUB_SHA" 
+          if [ -z "$HOSTINGER_PATH" ]; then
+            echo "[error] HOSTINGER_PATH not set"; exit 1;
+          fi
           COMMIT="$GITHUB_SHA"
-          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           JSON=$(printf '{"commit":"%s","deployed_at":"%s","source":"github_actions"}' "$COMMIT" "$STAMP")
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s' '$JSON' > '$HOSTINGER_PATH/.deploy-info.json.tmp' && mv '$HOSTINGER_PATH/.deploy-info.json.tmp' '$HOSTINGER_PATH/.deploy-info.json'" \
-            || { echo '[warn] Failed to write deploy marker'; exit 1; }
+          echo "$JSON" > .deploy-info.json || { echo '[error] Failed to create local marker'; exit 1; }
+          REMOTE_DIR="${HOSTINGER_PATH%/}"
+          # Try scp first (simpler quoting), fallback to ssh printf if scp unavailable
+          if command -v scp >/dev/null 2>&1; then
+            scp -P "$HOSTINGER_SSH_PORT" .deploy-info.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_DIR/.deploy-info.json" \
+              || {
+                echo '[warn] scp failed; attempting ssh printf fallback';
+                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s' '$JSON' > '$REMOTE_DIR/.deploy-info.json'" || { echo '[error] Both scp and ssh fallback failed'; exit 1; };
+              }
+          else
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s' '$JSON' > '$REMOTE_DIR/.deploy-info.json'" || { echo '[error] ssh write failed'; exit 1; }
+          fi
+          # Verify marker on remote
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s '$REMOTE_DIR/.deploy-info.json' && head -c 200 '$REMOTE_DIR/.deploy-info.json'" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
