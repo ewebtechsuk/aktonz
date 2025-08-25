@@ -82,14 +82,14 @@ jobs:
           MISS=0
           # wp-config.php may live either in the root or one directory above for mild hardening.
           # Check after initializing MISS so missing config increments properly.
-          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-config.php' ]" 2>/dev/null; then
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/wp-config.php\" ]" 2>/dev/null; then
             echo "[audit-pre] OK config: wp-config.php (root)"
-          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$(dirname \"$HOSTINGER_PATH\")/wp-config.php' ]" 2>/dev/null; then
+          elif PARENT_DIR=$(dirname "$HOSTINGER_PATH"); ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$PARENT_DIR/wp-config.php\" ]" 2>/dev/null; then
             echo "[audit-pre] OK config: wp-config.php (parent directory)"
           else
             echo "[audit-pre] MISSING config: wp-config.php (neither root nor parent)"; MISS=$((MISS+1));
           fi
-          REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'") || REMOTE_LIST=""
+          REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A \"$HOSTINGER_PATH\"") || REMOTE_LIST=""
           printf '%s' "$REMOTE_LIST" > remote_listing.txt
           echo "[audit-pre][debug] Remote path bytes:"; printf '%s' "$HOSTINGER_PATH" | od -An -tx1 | sed 's/^/[hex]/'
           # Required directories
@@ -98,7 +98,7 @@ jobs:
               echo "[audit-pre] OK dir(listing): $d"
             else
               # Fallback test directly
-              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]" 2>/dev/null; then
                 echo "[audit-pre] OK dir(test): $d"
               else
                 echo "[audit-pre] MISSING dir: $d"; MISS=$((MISS+1));
@@ -111,7 +111,7 @@ jobs:
             if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
               echo "[audit-pre] OK optional dir(listing): $d"
             else
-              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]" 2>/dev/null; then
                 echo "[audit-pre] OK optional dir(test): $d"
               else
                 echo "[audit-pre] OPTIONAL dir missing (ignored): $d"
@@ -122,7 +122,7 @@ jobs:
             if grep -Fxq "$f" <<<"$REMOTE_LIST"; then
               echo "[audit-pre] OK file(listing): $f"
             else
-              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/$f' ]" 2>/dev/null; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/$f\" ]" 2>/dev/null; then
                 echo "[audit-pre] OK file(test): $f"
               else
                 echo "[audit-pre] MISSING file: $f"; MISS=$((MISS+1));
@@ -131,7 +131,7 @@ jobs:
           done
           # Try to tail a recent PHP error log if present
           for cand in php-error.log debug.log error_log; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$cand' ]"; then
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/wp-content/$cand\" ]"; then
               echo "[audit-pre] Tail of wp-content/$cand:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break; fi
           done
           echo "[audit-pre] Missing count: $MISS"
@@ -258,9 +258,9 @@ jobs:
           if [ "$MINUTES" -lt 1 ]; then MINUTES=15; fi
           CONFIG_ROOT="$HOSTINGER_PATH/wp-config.php"
           CONFIG_PARENT="$(dirname "$HOSTINGER_PATH")/wp-config.php"
-          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$CONFIG_ROOT' ]"; then
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$CONFIG_ROOT\" ]"; then
             TARGET="$CONFIG_ROOT"
-          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$CONFIG_PARENT' ]"; then
+          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$CONFIG_PARENT\" ]"; then
             TARGET="$CONFIG_PARENT"
           else
             echo "[debug-toggle] wp-config.php not found in root or parent; skipping."; exit 0
@@ -346,7 +346,7 @@ jobs:
           echo "[runtime] --- Body (first 80 lines) ---"; nl -ba body.html | sed 's/^/[body]/' | head -n 80
           # Tail candidate logs
           for cand in debug.log php-error.log error_log; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$cand' ]"; then
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/wp-content/$cand\" ]"; then
               echo "[runtime] Tail of wp-content/$cand"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 60 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'
             fi
           done
@@ -376,12 +376,12 @@ jobs:
           REQUIRED_DIRS=(wp-admin wp-includes wp-content)
             OPTIONAL_DIRS=(core storage)
           MISS=0
-          REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'") || REMOTE_LIST=""
+          REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A \"$HOSTINGER_PATH\"") || REMOTE_LIST=""
           for d in "${REQUIRED_DIRS[@]}"; do
             if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
               echo "[audit-post] OK dir(listing): $d"
             else
-              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]" 2>/dev/null; then
                 echo "[audit-post] OK dir(test): $d"
               else
                 echo "[audit-post] MISSING dir: $d"; MISS=$((MISS+1)); fi
@@ -391,7 +391,7 @@ jobs:
             if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
               echo "[audit-post] OK optional dir(listing): $d"
             else
-              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]" 2>/dev/null; then
                 echo "[audit-post] OK optional dir(test): $d"
               else
                 echo "[audit-post] OPTIONAL dir missing (ignored): $d"; fi
