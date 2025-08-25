@@ -45,6 +45,12 @@ jobs:
         run: |
           echo "[audit-pre] Starting pre-audit (event=${GITHUB_EVENT_NAME} audit_input=${AUDIT_INPUT:-n/a})"
           if [ -z "$HOSTINGER_PATH" ]; then echo "[audit-pre] HOSTINGER_PATH secret missing"; exit 1; fi
+          # Sanitize HOSTINGER_PATH (remove trailing CR/LF/whitespace) to avoid newline in path causing false negatives
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          if [ "$CLEAN_PATH" != "$HOSTINGER_PATH" ]; then
+            echo "[audit-pre] Trimmed HOSTINGER_PATH -> '$CLEAN_PATH' (raw had trailing whitespace)"
+          fi
+          HOSTINGER_PATH="$CLEAN_PATH"
           EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
           EXPECT_FILES=(index.php wp-load.php)
           ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit-pre] SSH failed"; exit 1; }
@@ -104,6 +110,12 @@ jobs:
         if: ${{ github.event.inputs.audit != 'true' }}
         run: |
           # Base rsync excludes
+          # Sanitize HOSTINGER_PATH (remove trailing CR/LF/whitespace) for consistency
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          if [ "$CLEAN_PATH" != "$HOSTINGER_PATH" ]; then
+            echo "[deploy] Trimmed HOSTINGER_PATH -> '$CLEAN_PATH'"
+          fi
+          HOSTINGER_PATH="$CLEAN_PATH"
           RSYNC_EXCLUDES=(
             ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade"
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
@@ -168,6 +180,8 @@ jobs:
           if [ -z "$HOSTINGER_PATH" ]; then
             echo "[error] HOSTINGER_PATH not set"; exit 1;
           fi
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
           COMMIT="$GITHUB_SHA"
             STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           JSON=$(printf '{"commit":"%s","deployed_at":"%s","source":"github_actions"}' "$COMMIT" "$STAMP")
@@ -205,6 +219,8 @@ jobs:
         if: ${{ success() && github.event.inputs.audit != 'true' }}
         run: |
           echo "[audit-post] Verifying critical directories after deployment"
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
           EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
           MISS=0
           REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'") || REMOTE_LIST=""
