@@ -277,9 +277,10 @@ jobs:
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
             # Remove any existing WP_CACHE constant definitions but keep WP_CACHE_KEY_SALT (match literal constant name only)
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if grep -Eq 'define[[:space:]]*\([^)]*['\\"']WP_CACHE['\\"']' '$CFG'; then sed -i.bak -E "/define[[:space:]]*\\([^)]*['\\\"]WP_CACHE['\\\"]/d" '$CFG' && echo '[dropins] Removed existing WP_CACHE define(s)'; fi" || true
-            # Append clean definition using base64 (avoids heredoc indentation YAML pitfalls)
-            CONTENT_BASE64=$(printf '%s\n' "// Managed by CI: force disable page/object cache while troubleshooting" $'if (!defined(\'WP_CACHE\')) { define(\'WP_CACHE\', false); }' | base64 -w0)
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s' \"$CONTENT_BASE64\" | base64 -d >> '$CFG'" || true
+            # Append clean definition using a local temp file piped to SSH (simplest, avoids complex quoting)
+            printf '%s\n' "// Managed by CI: force disable page/object cache while troubleshooting" "if (!defined('WP_CACHE')) { define('WP_CACHE', false); }" > wp_cache_snippet.txt
+            cat wp_cache_snippet.txt | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat >> '$CFG'" || true
+            rm -f wp_cache_snippet.txt || true
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo '[dropins] Appended clean WP_CACHE=false definition'" || true
             # Show resulting lines referencing WP_CACHE (including potential key salt)
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n 'WP_CACHE' '$CFG' | sed 's/^/[dropins][cfg]/' || true" || true
