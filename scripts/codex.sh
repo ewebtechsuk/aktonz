@@ -66,13 +66,73 @@ load_env(){
 }
 
 compose(){ docker compose $COMPOSE_PROJECT "$@"; }
-wp(){ compose exec -T wordpress wp "$@"; }
+# Always allow root inside official wordpress container & suppress warning
+wp(){ compose exec -T wordpress wp --allow-root "$@"; }
 
 ensure_compose_file(){
-  local DOCKER_COMPOSE_YML_CONTENT='version: "3.9"\nservices:\n  db:\n    image: ${DB_IMAGE}\n    container_name: ${PROJECT_NAME}_db\n    restart: unless-stopped\n    environment:\n      MYSQL_DATABASE: ${DB_NAME}\n      MYSQL_USER: ${DB_USER}\n      MYSQL_PASSWORD: ${DB_PASSWORD}\n      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}\n    ports:\n      - "${DB_PORT}:3306"\n    volumes:\n      - db_data:/var/lib/mysql\n    healthcheck:\n      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]\n      interval: 10s\n      timeout: 5s\n      retries: 6\n  wordpress:\n    image: wordpress:${WP_VERSION}\n    container_name: ${PROJECT_NAME}_wp\n    depends_on:\n      db:\n        condition: service_healthy\n    restart: unless-stopped\n    environment:\n      WORDPRESS_DB_HOST: db:3306\n      WORDPRESS_DB_NAME: ${DB_NAME}\n      WORDPRESS_DB_USER: ${DB_USER}\n      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}\n      WORDPRESS_CONFIG_EXTRA: |\n        define('TABLE_PREFIX', '${TABLE_PREFIX}');\n    ports:\n      - "${SITE_HTTP_PORT}:80"\n    volumes:\n      - ./:/var/www/html\n      - ./docker/php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro\n      - ./docker/php/xdebug.ini:/usr/local/etc/php/conf.d/xdebug.ini:ro\n    extra_hosts:\n      - "${SITE_HOST}:127.0.0.1"\n  phpmyadmin:\n    image: phpmyadmin:5\n    container_name: ${PROJECT_NAME}_pma\n    restart: unless-stopped\n    environment:\n      PMA_HOST: db\n    ports:\n      - "${PHPMYADMIN_PORT:-8081}:80"\n    depends_on:\n      db:\n        condition: service_healthy\nvolumes:\n  db_data:\n'
-  if [ ! -f docker-compose.yml ]; then
-    printf '%s' "$DOCKER_COMPOSE_YML_CONTENT" > docker-compose.yml
-    log "Created docker-compose.yml"
+  # Regenerate if:
+  #  - Missing
+  #  - Previously created with literal \n sequences (bad YAML)
+  #  - Uses deprecated WORDPRESS_CONFIG_EXTRA injection (we now prefer WORDPRESS_TABLE_PREFIX)
+  if [ ! -f docker-compose.yml ] || grep -q '\\nservices:' docker-compose.yml || grep -q 'WORDPRESS_CONFIG_EXTRA' docker-compose.yml; then
+    cat > docker-compose.yml <<EOF
+version: "3.9"
+services:
+  db:
+    image: ${DB_IMAGE}
+    container_name: ${PROJECT_NAME}_db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+    ports:
+      - "${DB_PORT}:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+  wordpress:
+    image: wordpress:${WP_VERSION}
+    container_name: ${PROJECT_NAME}_wp
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: ${DB_NAME}
+      WORDPRESS_DB_USER: ${DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DB_PASSWORD}
+      WORDPRESS_TABLE_PREFIX: ${TABLE_PREFIX}
+      WP_CLI_ALLOW_ROOT: 1
+    ports:
+      - "${SITE_HTTP_PORT}:80"
+    volumes:
+      - ./:/var/www/html
+      - ./docker/php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+      - ./docker/php/xdebug.ini:/usr/local/etc/php/conf.d/xdebug.ini:ro
+    extra_hosts:
+      - "${SITE_HOST}:127.0.0.1"
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: ${PROJECT_NAME}_pma
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+    ports:
+      - "${PHPMYADMIN_PORT:-8081}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  db_data:
+EOF
+    log "(Re)generated docker-compose.yml"
   fi
 }
 
@@ -133,14 +193,17 @@ EOF
 }
 
 initial_wp_install(){
-  if ! compose exec -T wordpress wp core is-installed >/dev/null 2>&1; then
+  if ! wp core is-installed >/dev/null 2>&1; then
     log "Running initial wp core install"
-    compose exec -T wordpress wp core install \
+    if ! wp core install \
       --url="${SITE_URL}" \
       --title="${PROJECT_NAME^} Local" \
       --admin_user=admin \
       --admin_password=admin \
-      --admin_email=admin@example.test || true
+      --admin_email=admin@example.test; then
+        err "Install failed, retrying once..."; sleep 5;
+        wp core install --url="${SITE_URL}" --title="${PROJECT_NAME^} Local" --admin_user=admin --admin_password=admin --admin_email=admin@example.test || err "Second install attempt failed"
+    fi
   else
     log "WP already installed"
   fi
@@ -164,16 +227,23 @@ auto_disable_plugins(){
 
 wait_for_http(){
   log "Waiting for WordPress HTTP (max 60s)"
-  local ATTEMPTS=0
-  until curl -fsS "${SITE_URL}/" >/dev/null 2>&1 || [ $ATTEMPTS -ge 30 ]; do
-    sleep 2; ATTEMPTS=$((ATTEMPTS+1)); printf '.'
+  local ATTEMPTS=0 STATUS
+  while [ $ATTEMPTS -lt 30 ]; do
+    STATUS=$(curl -s -o /dev/null -w '%{http_code}' "${SITE_URL}/" || true)
+    if [[ "$STATUS" =~ ^2[0-9][0-9]$ ]]; then
+      log "Site reachable (${STATUS}) at ${SITE_URL}"
+      return 0
+    elif [[ "$STATUS" == "500" ]]; then
+      err "Received 500 early (attempt $ATTEMPTS). Will continue waiting in case of transient startup."
+    fi
+    sleep 2; ATTEMPTS=$((ATTEMPTS+1));
   done
-  printf '\n'
-  if curl -fsS "${SITE_URL}/" >/dev/null 2>&1; then
-    log "Site reachable at ${SITE_URL}"
+  if [ -n "$STATUS" ]; then
+    err "Site not healthy after wait (last status: $STATUS)"
   else
-    log "Site not yet reachable; continue manually if needed"
+    err "Site not reachable after wait"
   fi
+  return 1
 }
 
 perform_setup(){
@@ -186,10 +256,37 @@ perform_setup(){
   log "Bringing up containers (detached)"
   docker compose -p "$PROJECT_NAME" up -d --build
   docker compose -p "$PROJECT_NAME" ps
-  wait_for_http
+  ensure_wp_cli
   initial_wp_install
+  wait_for_http || true
   auto_disable_plugins
+  summary_output
   log "Setup complete. Try: ./scripts/codex.sh status"
+}
+
+# Ensure wp-cli present inside wordpress container (some base images may exclude it)
+ensure_wp_cli(){
+  if ! docker compose -p "$PROJECT_NAME" exec -T wordpress bash -lc 'command -v wp' >/dev/null 2>&1; then
+    log "wp-cli missing; installing"
+    docker compose -p "$PROJECT_NAME" exec -T wordpress bash -lc 'curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /usr/local/bin/wp && chmod +x /usr/local/bin/wp' || err "Failed to install wp-cli"
+  else
+    log "wp-cli present"
+  fi
+}
+
+summary_output(){
+  log "----- SUMMARY -----"
+  log "Site URL: ${SITE_URL}"
+  if wp core is-installed >/dev/null 2>&1; then
+    log "Admin: ${SITE_URL}/wp-admin/ (user: admin / pass: admin)"
+  else
+    err "WordPress not installed (visit ${SITE_URL}/wp-admin/install.php)"
+  fi
+  log "phpMyAdmin: http://localhost:${PHPMYADMIN_PORT:-8081}"
+  log "WP CLI: ./scripts/codex.sh wp <cmd>"
+  [ -n "${AUTO_DISABLE_PLUGINS:-}" ] && log "Auto-disable targets: ${AUTO_DISABLE_PLUGINS}" || true
+  log "DB backup: ./scripts/codex.sh backup-db"
+  log "--------------------"
 }
 
 usage(){ cat <<'EOF'
@@ -197,6 +294,8 @@ Codex unified script
 Setup:
   setup                        Provision / update local environment
   print-env-template           Output example .env to stdout
+  doctor                      Run environment diagnostics (Docker, ports, perms)
+  fix-wp-cli                  Reinstall or ensure wp-cli inside container
 Common:
   help                         Show this help
   status                       Container status + site & WP version
@@ -244,6 +343,48 @@ fi
 case "$COMMAND" in
   setup) perform_setup ;;
   print-env-template) create_env_templates; cat "$EXAMPLE_ENV" ;;
+  doctor)
+    load_env || true
+    log "Running diagnostics"
+    if command -v docker >/dev/null 2>&1; then
+      if docker info >/dev/null 2>&1; then
+        log "Docker daemon: OK"
+      else
+        err "Docker installed but daemon not reachable"
+      fi
+    else
+      err "Docker command not found (install Docker Desktop / Engine)"
+    fi
+    # Port checks
+    SITE_HTTP_PORT=${SITE_HTTP_PORT:-8080}
+    DB_PORT=${DB_PORT:-3307}
+    check_port(){
+      local p=$1 label=$2
+      if command -v ss >/dev/null 2>&1 && ss -ltn | awk '{print $4}' | grep -E "[:.]$p$" >/dev/null 2>&1; then
+        err "Port $p ($label) appears in use"
+      elif command -v lsof >/dev/null 2>&1 && lsof -iTCP -sTCP:LISTEN -Pn 2>/dev/null | grep -q ":$p"; then
+        err "Port $p ($label) in use (lsof)"
+      else
+        log "Port $p ($label): free"
+      fi
+    }
+    check_port "$SITE_HTTP_PORT" http
+    check_port "$DB_PORT" db
+    # File permissions
+    for f in .env docker-compose.yml; do
+      if [ -f "$f" ]; then
+        if [ -w "$f" ]; then log "Writable: $f"; else err "Not writable: $f"; fi
+      fi
+    done
+    # Containers
+    if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -q "${PROJECT_NAME}_wp"; then
+      log "Container ${PROJECT_NAME}_wp present"
+    else
+      log "WordPress container not running yet"
+    fi
+    log "Diagnostics complete"
+    ;;
+  fix-wp-cli) ensure_wp_cli ;;
   help|-h|--help) usage ;;
   status) compose ps; if compose exec -T wordpress wp core version >/dev/null 2>&1; then log "WP Version: $(wp core version)"; log "Site URL: $(wp option get siteurl)"; else log "WordPress not yet installed"; fi ;;
   logs) svc=${1:-wordpress}; shift || true; compose logs -f "$svc" ;;

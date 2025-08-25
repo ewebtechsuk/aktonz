@@ -1,0 +1,55 @@
+version: "3.9"
+services:
+  db:
+    image: mariadb:10.6
+    container_name: aktonz_db
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: wpdb
+      MYSQL_USER: wpuser
+      MYSQL_PASSWORD: wpsecret
+      MYSQL_ROOT_PASSWORD: rootpw
+    ports:
+      - "3307:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+  wordpress:
+    image: wordpress:latest
+    container_name: aktonz_wp
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: wpdb
+      WORDPRESS_DB_USER: wpuser
+      WORDPRESS_DB_PASSWORD: wpsecret
+      WORDPRESS_TABLE_PREFIX: wp_
+      WP_CLI_ALLOW_ROOT: 1
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/var/www/html
+      - ./docker/php/uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+      - ./docker/php/xdebug.ini:/usr/local/etc/php/conf.d/xdebug.ini:ro
+    extra_hosts:
+      - "localhost:127.0.0.1"
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: aktonz_pma
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+    ports:
+      - "8081:80"
+    depends_on:
+      db:
+        condition: service_healthy
+volumes:
+  db_data:
