@@ -221,37 +221,14 @@ jobs:
           # Determine if LiteSpeed plugin is disabled (directory renamed) or absent
           LSP_ORIG="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
           LSP_DISABLED="$LSP_ORIG.disabled"
-          CHECK_CMD=''
           if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_DISABLED' ] && [ ! -d '$LSP_ORIG' ]"; then
             echo "[dropins] LiteSpeed appears disabled (found litespeed-cache.disabled). Checking drop-ins..."
-            # advanced-cache.php may still reference LiteSpeed classes; rename to advanced-cache.php.disabled to prevent include.
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
-              AC=\"$HOSTINGER_PATH/wp-content/advanced-cache.php\"
-              if [ -f \"$HOSTINGER_PATH/wp-content/object-cache.php\" ]; then
-                if grep -qi litespeed \"$HOSTINGER_PATH/wp-content/object-cache.php\"; then
-                  mv -f \"$HOSTINGER_PATH/wp-content/object-cache.php\" \"$HOSTINGER_PATH/wp-content/object-cache.php.disabled\" && echo \"[dropins] Disabled object-cache.php (LiteSpeed)\" || true
-                fi
-              fi
-              if [ -f \"$AC\" ]; then
-                if grep -qi litespeed \"$AC\"; then
-                  mv -f \"$AC\" \"$AC.disabled\" && echo \"[dropins] Renamed advanced-cache.php -> advanced-cache.php.disabled\" || true
-                else
-                  echo \"[dropins] advanced-cache.php present but no LiteSpeed signature; leaving intact\"
-                fi
-              else
-                echo \"[dropins] No advanced-cache.php present\"
-              fi
-            '" || true
-            # Attempt to neutralize WP_CACHE define in wp-config.php if it still forces caching
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
-              CFG=\"$HOSTINGER_PATH/wp-config.php\"
-              if [ ! -f \"$CFG\" ]; then CFG=\"$(dirname $HOSTINGER_PATH)/wp-config.php\"; fi
-              if [ -f \"$CFG\" ]; then
-                if grep -q "WP_CACHE" \"$CFG\"; then
-                  sed -i.bak -E "s/define\( *'WP_CACHE' *, *true *\)/define('WP_CACHE', false) \/\/ auto-disabled by CI/g" \"$CFG\" && echo \"[dropins] Ensured WP_CACHE false in wp-config.php\" || true
-                fi
-              fi
-            '" || true
+            # object-cache.php may still reference LiteSpeed classes
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/object-cache.php' ] && grep -qi litespeed '$HOSTINGER_PATH/wp-content/object-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/object-cache.php' '$HOSTINGER_PATH/wp-content/object-cache.php.disabled' && echo '[dropins] Disabled object-cache.php (LiteSpeed)'; else echo '[dropins] object-cache.php absent or no LiteSpeed signature'; fi" || true
+            # advanced-cache.php handling
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' ]; then if grep -qi litespeed '$HOSTINGER_PATH/wp-content/advanced-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' '$HOSTINGER_PATH/wp-content/advanced-cache.php.disabled' && echo '[dropins] Renamed advanced-cache.php -> advanced-cache.php.disabled'; else echo '[dropins] advanced-cache.php present but no LiteSpeed signature; leaving intact'; fi; else echo '[dropins] No advanced-cache.php present'; fi" || true
+            # WP_CACHE define neutralization
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "CFG='$HOSTINGER_PATH/wp-config.php'; if [ ! -f \"$CFG\" ]; then CFG='$(dirname "$HOSTINGER_PATH")/wp-config.php'; fi; if [ -f \"$CFG\" ]; then if grep -q WP_CACHE \"$CFG\"; then sed -i.bak \"s/define('WP_CACHE',[[:space:]]*true)/define('WP_CACHE', false) \\\/\\/ auto-disabled by CI/\" \"$CFG\" && echo '[dropins] Ensured WP_CACHE false in wp-config.php'; else echo '[dropins] WP_CACHE define not found or already false'; fi; else echo '[dropins] wp-config.php not found for WP_CACHE neutralization'; fi" || true
           else
             echo "[dropins] LiteSpeed plugin not detected as disabled (either still active or never installed); skipping drop-in neutralization"
           fi
