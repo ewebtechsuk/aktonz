@@ -88,6 +88,21 @@ jobs:
             echo "[audit-pre] OK config: wp-config.php (parent directory)"
           else
             echo "[audit-pre] MISSING config: wp-config.php (neither root nor parent)"; MISS=$((MISS+1));
+            # Fallback heuristic search to help operator correct HOSTINGER_PATH secret if mis-pointed
+            BASE_DIR=$(dirname "$HOSTINGER_PATH")
+            echo "[audit-pre][hint] Searching nearby directories (maxdepth 4) for wp-config.php to suggest correct path..."
+            CANDIDATES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find \"$BASE_DIR\" -maxdepth 4 -type f -name wp-config.php 2>/dev/null | sort" || true)
+            if [ -n "$CANDIDATES" ]; then
+              echo "$CANDIDATES" | sed 's/^/[audit-pre][hint][found] /'
+              # If exactly one candidate, propose exporting as corrected path
+              ONE_COUNT=$(echo "$CANDIDATES" | wc -l | tr -d ' ')
+              if [ "$ONE_COUNT" = "1" ]; then
+                SUGGESTED=$(dirname "$CANDIDATES")
+                echo "[audit-pre][hint] Consider updating HOSTINGER_PATH secret to: $SUGGESTED"
+              fi
+            else
+              echo "[audit-pre][hint] No wp-config.php found within 4 levels of $BASE_DIR"
+            fi
           fi
           REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A \"$HOSTINGER_PATH\"") || REMOTE_LIST=""
           printf '%s' "$REMOTE_LIST" > remote_listing.txt
@@ -263,7 +278,15 @@ jobs:
           elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$CONFIG_PARENT\" ]"; then
             TARGET="$CONFIG_PARENT"
           else
-            echo "[debug-toggle] wp-config.php not found in root or parent; skipping."; exit 0
+            echo "[debug-toggle] wp-config.php not found in root or parent; attempting heuristic search...";
+            BASE_DIR=$(dirname "$HOSTINGER_PATH")
+            CAND=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find \"$BASE_DIR\" -maxdepth 4 -type f -name wp-config.php 2>/dev/null | head -n 1" || true)
+            if [ -n "$CAND" ]; then
+              TARGET="$CAND"
+              echo "[debug-toggle] Using discovered config: $TARGET"
+            else
+              echo "[debug-toggle] No wp-config.php discovered by search; skipping."; exit 0
+            fi
           fi
           echo "[debug-toggle] Target config: $TARGET (action=$ACTION minutes=$MINUTES)"
           if [ "$ACTION" = "enable" ]; then
