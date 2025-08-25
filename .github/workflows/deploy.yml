@@ -77,18 +77,18 @@ jobs:
           REQUIRED_DIRS=(wp-admin wp-includes wp-content)
           OPTIONAL_DIRS=(core storage)
           EXPECT_FILES=(index.php wp-load.php)
-          # wp-config.php may live either in the root or one directory above for mild hardening
-          # We'll check both locations explicitly; only count as missing if absent in both.
+          ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit-pre] SSH failed"; exit 1; }
+          echo "[audit-pre] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
+          MISS=0
+          # wp-config.php may live either in the root or one directory above for mild hardening.
+          # Check after initializing MISS so missing config increments properly.
           if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-config.php' ]" 2>/dev/null; then
             echo "[audit-pre] OK config: wp-config.php (root)"
-          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$(dirname "$HOSTINGER_PATH")/wp-config.php' ]" 2>/dev/null; then
+          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$(dirname \"$HOSTINGER_PATH\")/wp-config.php' ]" 2>/dev/null; then
             echo "[audit-pre] OK config: wp-config.php (parent directory)"
           else
             echo "[audit-pre] MISSING config: wp-config.php (neither root nor parent)"; MISS=$((MISS+1));
           fi
-          ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit-pre] SSH failed"; exit 1; }
-          echo "[audit-pre] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
-          MISS=0
           REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'") || REMOTE_LIST=""
           printf '%s' "$REMOTE_LIST" > remote_listing.txt
           echo "[audit-pre][debug] Remote path bytes:"; printf '%s' "$HOSTINGER_PATH" | od -An -tx1 | sed 's/^/[hex]/'
