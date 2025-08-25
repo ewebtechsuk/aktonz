@@ -176,6 +176,31 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Prune stale LiteSpeed disabled copies (keep newest 2)
+        if: ${{ github.event.inputs.audit != 'true' }}
+        run: |
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          echo "[prune] Checking for stale litespeed-cache.disabled.* directories"
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
+            PLUGDIR=\"$HOSTINGER_PATH/wp-content/plugins\"
+            cd \"$HOSTINGER_PATH/wp-content/plugins\" 2>/dev/null || exit 0
+            LIST=$(ls -1d litespeed-cache.disabled.* 2>/dev/null | sort -t. -k4,4n || true)
+            COUNT=$(echo \"$LIST\" | grep -c litespeed-cache.disabled || true)
+            if [ -z \"$LIST\" ] || [ $COUNT -le 2 ]; then echo '[prune] Nothing to prune (count='$COUNT')'; exit 0; fi
+            # Keep newest 2 (largest timestamp) -> delete older ones
+            KEEP=$(echo \"$LIST\" | tail -n 2)
+            echo "[prune] Keeping:"; echo "$KEEP" | sed 's/^/[prune][keep] /'
+            TO_DELETE=$(comm -23 <(echo \"$LIST\" | tr ' ' '\n') <(echo \"$KEEP\" | tr ' ' '\n'))
+            echo "[prune] Deleting:"; echo "$TO_DELETE" | sed 's/^/[prune][del] /'
+            for d in $TO_DELETE; do rm -rf -- "$d" || echo '[prune][warn] Failed to remove '$d; done
+          '" || true
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Disable requested plugins (rename folders)
         # Runs when not an audit; script itself checks if any list (input or secret) provided
         if: ${{ github.event.inputs.audit != 'true' }}
@@ -221,53 +246,56 @@ jobs:
           # Determine if LiteSpeed plugin is disabled (directory renamed) or absent
           LSP_ORIG="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
           LSP_DISABLED="$LSP_ORIG.disabled"
-          # Robust WP_CACHE define neutralization
-          # Treat plugin as disabled if the .disabled directory exists; if both exist, force-renaming original copy to eliminate activation.
+          # If plugin appears disabled, also neutralize drop-ins referencing LiteSpeed
           if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_DISABLED' ]"; then
-            # Conflict: both original and disabled present -> force rename original to prevent load.
             if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_ORIG' ]"; then
               TS=$(date +%s)
               echo "[dropins] Conflict: both litespeed-cache and litespeed-cache.disabled exist. Force-renaming active copy -> litespeed-cache.disabled.$TS"
               ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mv '$LSP_ORIG' '$LSP_ORIG.disabled.$TS'" || echo "[dropins][warn] Force rename failed (permissions?)"
             fi
-            echo "[dropins] LiteSpeed treated as disabled (litespeed-cache.disabled present). Neutralizing drop-ins..."
-            # object-cache.php may still reference LiteSpeed classes
+            echo "[dropins] LiteSpeed treated as disabled; neutralizing related drop-ins..."
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/object-cache.php' ] && grep -qi litespeed '$HOSTINGER_PATH/wp-content/object-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/object-cache.php' '$HOSTINGER_PATH/wp-content/object-cache.php.disabled' && echo '[dropins] Disabled object-cache.php (LiteSpeed)'; else echo '[dropins] object-cache.php absent or no LiteSpeed signature'; fi" || true
-            # advanced-cache.php handling
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' ]; then if grep -qi litespeed '$HOSTINGER_PATH/wp-content/advanced-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' '$HOSTINGER_PATH/wp-content/advanced-cache.php.disabled' && echo '[dropins] Renamed advanced-cache.php -> advanced-cache.php.disabled'; else echo '[dropins] advanced-cache.php present but no LiteSpeed signature; leaving intact'; fi; else echo '[dropins] No advanced-cache.php present'; fi" || true
-            # Robust WP_CACHE define neutralization (refactored to avoid nested quoting issues)
-            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
-            PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
-            CFG=""
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then
-              CFG="$ROOT_CFG"
-            elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then
-              CFG="$PARENT_CFG"
-            else
-              # Heuristic search (remote)
-              SEARCH_BASE="$(dirname "$HOSTINGER_PATH")"
-              CFG=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find '$SEARCH_BASE' -maxdepth 4 -type f -name wp-config.php 2>/dev/null | head -n1" || true)
-            fi
-            if [ -z "$CFG" ]; then
-              echo "[dropins] wp-config.php not found for WP_CACHE neutralization (searched root, parent, heuristic)";
-            else
-              echo "[dropins] Using config for WP_CACHE neutralization: $CFG"
-              # Replace any true -> false
-              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -Eq \"define[(]['\"']WP_CACHE['\"'], *true\" '$CFG' && sed -i.bak -E \"s/define[(](['\"']WP_CACHE['\"']), *true *\)/define(\1, false) \\/\\/ auto-disabled by CI/\" '$CFG' && echo '[dropins] Replaced WP_CACHE true -> false' || true" || true
-              # Ensure define exists and is false
-              EXISTS=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define[(]['\"']WP_CACHE['\"']\" '$CFG' >/dev/null && echo yes || echo no" || echo no)
-              if [ "$EXISTS" = "no" ]; then
-                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '\n// Added by CI to ensure caching disabled while LiteSpeed inactive\nif (!defined(\\''WP_CACHE\\'')) { define(\\''WP_CACHE\\'', false); }\n' >> '$CFG' && echo '[dropins] Appended WP_CACHE false define'" || true
-              else
-                # If define present but not explicitly false, report status
-                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -Eq \"define[(]['\"']WP_CACHE['\"'], *false\" '$CFG' && echo '[dropins] WP_CACHE already false' || echo '[dropins] WP_CACHE define present (non-true/non-false pattern left unchanged)'" || true
-              fi
-              # Show final line(s) containing WP_CACHE for verification
-              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n \"WP_CACHE\" '$CFG' | sed 's/^/[dropins][cfg]/' || true" || true
-            fi
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' ]; then if grep -qi litespeed '$HOSTINGER_PATH/wp-content/advanced-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' '$HOSTINGER_PATH/wp-content/advanced-cache.php.disabled' && echo '[dropins] Renamed advanced-cache.php -> advanced-cache.php.disabled'; else echo '[dropins] advanced-cache.php present but no LiteSpeed signature'; fi; else echo '[dropins] No advanced-cache.php present'; fi" || true
           else
-            echo "[dropins] litespeed-cache.disabled not present; plugin likely still active. (If fatal persists, add litespeed-cache to disable list or manually remove directory.)"
+            echo "[dropins] LiteSpeed plugin directory not (yet) disabled; skipping drop-in neutralization (still enforcing WP_CACHE=false)."
           fi
+          # Always enforce single clean WP_CACHE=false define to avoid stale caching state.
+          ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
+          PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
+          CFG=""
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then
+            CFG="$ROOT_CFG"
+          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then
+            CFG="$PARENT_CFG"
+          else
+            SEARCH_BASE="$(dirname "$HOSTINGER_PATH")"
+            CFG=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find '$SEARCH_BASE' -maxdepth 4 -type f -name wp-config.php 2>/dev/null | head -n1" || true)
+          fi
+          if [ -z "$CFG" ]; then
+            echo "[dropins] wp-config.php not found (cannot enforce WP_CACHE)";
+          else
+            echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
+            # Remove malformed legacy lines and any existing WP_CACHE defines (avoid touching WP_CACHE_KEY_SALT by restricting pattern to opening parenthesis define lines)
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if grep -Eq 'define[[:space:]]*\([^)]*WP_CACHE' '$CFG'; then sed -i.bak -E '/define[[:space:]]*\([^)]*WP_CACHE/d' '$CFG' && echo '[dropins] Removed existing WP_CACHE define(s)'; fi" || true
+            # Append clean definition
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '\n// Managed by CI: force disable page/object cache while troubleshooting\nif (!defined(\'WP_CACHE\')) { define(\'WP_CACHE\', false); }\n' >> '$CFG' && echo '[dropins] Appended clean WP_CACHE=false definition'" || true
+            # Show resulting lines referencing WP_CACHE (including potential key salt)
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n 'WP_CACHE' '$CFG' | sed 's/^/[dropins][cfg]/' || true" || true
+          fi
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Scan for residual LiteSpeed references (post-neutralization)
+        if: ${{ github.event.inputs.audit != 'true' }}
+        run: |
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          echo "[scan] Checking for residual LiteSpeed strings in wp-config.php, mu-plugins, object-cache, advanced-cache"
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -RIn -E 'LiteSpeed|litespeed' '$HOSTINGER_PATH/wp-config.php' '$HOSTINGER_PATH/wp-content/object-cache.php' '$HOSTINGER_PATH/wp-content/advanced-cache.php' '$HOSTINGER_PATH/wp-content/mu-plugins' 2>/dev/null | head -n 120" | sed 's/^/[scan]/' || echo '[scan] No references (or files missing)'
+          echo "[scan] Done (showing first 120 matches if any)."
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
