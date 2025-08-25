@@ -182,12 +182,26 @@ jobs:
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           echo "[prune] Checking for stale litespeed-cache.disabled.* directories"
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -c 'cd \"$HOSTINGER_PATH/wp-content/plugins\" 2>/dev/null || { echo [prune] Plugin dir missing; exit 0; }; LIST=\\$(ls -1dt litespeed-cache.disabled.* 2>/dev/null || true); [ -z \"$LIST\" ] && { echo [prune] Nothing to prune; exit 0; }; COUNT=\\$(printf %s \"$LIST\" | wc -l); if [ \"$COUNT\" -le 2 ]; then echo [prune] Nothing to prune \(count=$COUNT\); exit 0; fi; echo \"$LIST\" | sed 's/^/[prune][all] /'; echo \"$LIST\" | tail -n +3 | while read d; do [ -n \"$d\" ] && echo [prune][del] $d && rm -rf -- \"$d\"; done'" || true
+          # Retain newest N (default 2) disabled copies, remove older ones. Fix COUNT logic to correctly count lines.
+          RETAIN_COUNT=${RETAIN_DISABLED_LITESPEED:-2}
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -c '
+            set -e
+            cd \"$HOSTINGER_PATH/wp-content/plugins\" 2>/dev/null || { echo [prune] Plugin dir missing; exit 0; };
+            LIST=$(ls -1dt litespeed-cache.disabled.* 2>/dev/null || true)
+            if [ -z \"$LIST\" ]; then echo [prune] Nothing to prune; exit 0; fi
+            COUNT=$(echo \"$LIST\" | wc -l | tr -d " ")
+            echo \"[prune] Found $COUNT disabled copies (retaining $RETAIN_COUNT)\"
+            if [ "$COUNT" -le "$RETAIN_COUNT" ]; then echo [prune] Nothing to prune \(count=$COUNT\); exit 0; fi
+            echo "$LIST" | sed 's/^/[prune][all] /'
+            # Skip first RETAIN_COUNT lines (newest) then delete the rest
+            echo "$LIST" | tail -n +$((RETAIN_COUNT + 1)) | while read d; do [ -n "$d" ] && echo [prune][del] "$d" && rm -rf -- "$d"; done
+          '" || true
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          RETAIN_DISABLED_LITESPEED: ${{ secrets.RETAIN_DISABLED_LITESPEED }}
 
       - name: Disable requested plugins (rename folders)
         # Runs when not an audit; script itself checks if any list (input or secret) provided
