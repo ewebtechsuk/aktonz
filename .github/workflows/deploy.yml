@@ -260,13 +260,8 @@ jobs:
             echo "[dropins] wp-config.php not found (cannot enforce WP_CACHE)";
           else
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
-            # Robust sanitation: remove prior CI comment lines and ANY existing lines containing a define of WP_CACHE (case-insensitive)
-            # Then append exactly one managed block. Create a timestamped backup before modifying.
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "FILE='$CFG'; BAK=\"$CFG.ci.pre.$(date +%s).bak\"; cp -f \"$FILE\" \"$BAK\" 2>/dev/null || true; echo '[dropins][cfg] Pre-clean snapshot saved:' \"$BAK\"; echo '[dropins][cfg] Existing WP_CACHE lines BEFORE:'; grep -n -i 'WP_CACHE' \"$FILE\" || echo '[dropins][cfg] (none)'; sed -i -E '/^[[:space:]]*\/\/[[:space:]]+(Managed|Added) by CI/d; /define[[:space:]]*\([[:space:]]*"WP_CACHE"/Id' \"$FILE\"; echo '[dropins][cfg] Existing WP_CACHE lines AFTER removal (should be none):'; grep -n -i 'WP_CACHE' \"$FILE\" || echo '[dropins][cfg] (none)'" || true
-            # Append managed define (idempotent because prior lines removed)
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s\n%s\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> '$CFG'" || true
-            # Final verification
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n 'WP_CACHE' '$CFG'" | sed 's/^/[dropins][cfg][final]/' || true
+            # Simplified sanitation: show BEFORE, delete any existing CI comments + any lines referencing WP_CACHE (case-insensitive), append one managed define, show AFTER
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo '[dropins][cfg] BEFORE:'; grep -n -i WP_CACHE '$CFG' || echo '[dropins][cfg] (none)'; sed -i -E '/^[[:space:]]*\/\/[[:space:]]+(Managed|Added) by CI/d' '$CFG'; sed -i -E '/WP_CACHE/Id' '$CFG'; echo '[dropins][cfg] AFTER CLEAN (should be none):'; grep -n -i WP_CACHE '$CFG' || echo '[dropins][cfg] (none)'; printf '%s\n%s\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> '$CFG'; echo '[dropins][cfg] FINAL:'; grep -n -i WP_CACHE '$CFG' || echo '[dropins][cfg] (unexpected none)'" | sed 's/^/[dropins][cfg]/' || true
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
