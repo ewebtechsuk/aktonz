@@ -204,7 +204,7 @@ jobs:
           fi
           HOSTINGER_PATH="$CLEAN_PATH"
           RSYNC_EXCLUDES=(
-            ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade"
+            ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/litespeed" "wp-content/uploads" "wp-content/upgrade"
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
             "aktonz-local-copy" # local backup snapshot, never deploy
           )
