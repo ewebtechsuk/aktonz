@@ -13,6 +13,18 @@ on:
         description: "Set to true to run remote audit only (no rsync)"
         required: false
         default: "false"
+      debug_logs:
+        description: "If true: after deploy curl homepage + tail logs"
+        required: false
+        default: "false"
+      fail_on_fatal:
+        description: "If true: fail when homepage shows WP critical error or HTTP >=500"
+        required: false
+        default: "false"
+      dry_run:
+        description: "If true: rsync uses --dry-run (no remote file changes)"
+        required: false
+        default: "false"
 
 jobs:
   deploy:
@@ -57,6 +69,15 @@ jobs:
           REQUIRED_DIRS=(wp-admin wp-includes wp-content)
           OPTIONAL_DIRS=(core storage)
           EXPECT_FILES=(index.php wp-load.php)
+          # wp-config.php may live either in the root or one directory above for mild hardening
+          # We'll check both locations explicitly; only count as missing if absent in both.
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-config.php' ]" 2>/dev/null; then
+            echo "[audit-pre] OK config: wp-config.php (root)"
+          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$(dirname "$HOSTINGER_PATH")/wp-config.php' ]" 2>/dev/null; then
+            echo "[audit-pre] OK config: wp-config.php (parent directory)"
+          else
+            echo "[audit-pre] MISSING config: wp-config.php (neither root nor parent)"; MISS=$((MISS+1));
+          fi
           ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit-pre] SSH failed"; exit 1; }
           echo "[audit-pre] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
           MISS=0
@@ -172,12 +193,16 @@ jobs:
             echo "[deploy] Remote deletion disabled (safer sync). Set secret DELETE_REMOTE=true to enable."
           fi
           rsync -az -e "ssh -p $HOSTINGER_SSH_PORT" $DELETE_FLAG $EXCLUDE_ARGS ./ "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH" || { echo "[error] rsync failed"; exit 1; }
+          if [ "${DRY_RUN_INPUT}" = "true" ]; then
+            echo "[deploy] NOTE: This was a dry run; no remote changes were applied."
+          fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           DELETE_REMOTE: ${{ secrets.DELETE_REMOTE }}
+          DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
 
       - name: Optional - Run WP cache flush
         if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' && github.event.inputs.audit != 'true' }}
@@ -231,6 +256,40 @@ jobs:
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
           HEALTHCHECK_PATH: ${{ secrets.HEALTHCHECK_PATH }}
+
+      - name: Runtime probe & log tail (optional)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.debug_logs == 'true' }}
+        run: |
+          if [ -z "$PRODUCTION_URL" ]; then echo "[runtime] PRODUCTION_URL not set; skipping curl."; exit 0; fi
+          URL="${PRODUCTION_URL%/}/"
+          echo "[runtime] Probing homepage: $URL"
+          # Capture body & headers
+          curl -s -S -D headers.txt -o body.html -w '%{http_code}' "$URL" > status_code.txt || true
+          SC=$(cat status_code.txt)
+          echo "[runtime] HTTP status: $SC"; echo "[runtime] --- Headers ---"; sed 's/^/[hdr]/' headers.txt | head -n 40
+          echo "[runtime] --- Body (first 80 lines) ---"; nl -ba body.html | sed 's/^/[body]/' | head -n 80
+          # Tail candidate logs
+          for cand in debug.log php-error.log error_log; do
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$cand' ]"; then
+              echo "[runtime] Tail of wp-content/$cand"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 60 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'
+            fi
+          done
+          FAIL=0
+          if [ "${FAIL_ON_FATAL}" = "true" ]; then
+            if [ "$SC" -ge 500 ] || grep -qi 'critical error' body.html; then
+              echo "[runtime] Detected fatal indicator (status $SC or body contains 'critical error')."
+              FAIL=1
+            fi
+          fi
+          if [ $FAIL -eq 1 ]; then
+            echo "[runtime] Failing job due to fatal detection."; exit 1; fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          FAIL_ON_FATAL: ${{ github.event.inputs.fail_on_fatal }}
 
       - name: Post-audit (verify after sync)
         if: ${{ success() && github.event.inputs.audit != 'true' }}
