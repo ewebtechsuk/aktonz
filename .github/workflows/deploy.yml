@@ -43,6 +43,10 @@ jobs:
             ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade"
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
           )
+
+          # Exclude remote-only or dynamically generated directories that are not tracked in the repo but required in production.
+          # These paths existed on production (e.g. asset/CSS generation or custom platform code) and were likely removed by --delete, causing homepage fatal errors.
+          RSYNC_EXCLUDES+=("core" "storage")
           
           # Guard: detect ONLY top-level accidental self-nested duplicate directories (./name/name) to exclude
           # This avoids excluding legitimate vendor paths like twig/twig inside plugins.
@@ -63,12 +67,22 @@ jobs:
           echo "[deploy] Connectivity test (ssh banner)..." || true
           ssh -o BatchMode=yes -o ConnectTimeout=10 -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] ssh ok' || { echo "[error] SSH connection failed. Verify HOSTINGER_* secrets, firewall, and that the key is installed."; exit 1; }
           echo "[deploy] Starting rsync..." 
-          rsync -az -e "ssh -p $HOSTINGER_SSH_PORT" --delete $EXCLUDE_ARGS ./ "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH" || { echo "[error] rsync failed"; exit 1; }
+          # Make --delete optional to avoid wiping remote-only directories (like core/, storage/) by default.
+          # Enable deletion only if DELETE_REMOTE is explicitly set to 'true'.
+          DELETE_FLAG=""
+          if [ "${DELETE_REMOTE:-false}" = "true" ]; then
+            DELETE_FLAG="--delete"
+            echo "[deploy] Remote deletion enabled (--delete)."
+          else
+            echo "[deploy] Remote deletion disabled (safer sync). Set secret DELETE_REMOTE=true to enable."
+          fi
+          rsync -az -e "ssh -p $HOSTINGER_SSH_PORT" $DELETE_FLAG $EXCLUDE_ARGS ./ "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH" || { echo "[error] rsync failed"; exit 1; }
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          DELETE_REMOTE: ${{ secrets.DELETE_REMOTE }}
 
       - name: Optional - Run WP cache flush
         if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' }}
