@@ -182,7 +182,7 @@ jobs:
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           echo "[prune] Checking for stale litespeed-cache.disabled.* directories"
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash <<'PRUNE' || true
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -s" <<'PRUNE' || true
 set -e
 cd "$HOSTINGER_PATH/wp-content/plugins" 2>/dev/null || { echo '[prune] Plugin dir missing; skip'; exit 0; }
 LIST=$(ls -1d litespeed-cache.disabled.* 2>/dev/null | sort -t. -k4,4n || true)
