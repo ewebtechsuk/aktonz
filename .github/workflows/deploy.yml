@@ -9,6 +9,10 @@ on:
         description: "Reason for manual deployment"
         required: false
         default: ""
+      audit:
+        description: "Set to true to run remote audit only (no rsync)"
+        required: false
+        default: "false"
 
 jobs:
   deploy:
@@ -36,7 +40,45 @@ jobs:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
 
+      - name: Remote audit (inventory critical paths)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        id: remote_audit
+        run: |
+          echo "[audit] Starting remote audit (audit input=${{ github.event.inputs.audit }})"
+          if [ -z "$HOSTINGER_PATH" ]; then echo "[audit] HOSTINGER_PATH secret missing"; exit 1; fi
+          EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
+          EXPECT_FILES=(index.php wp-load.php)
+          ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit] SSH failed"; exit 1; }
+          echo "[audit] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
+          MISS=0
+          for d in "${EXPECT_DIRS[@]}"; do
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]"; then
+              echo "[audit] OK dir: $d"
+            else
+              echo "[audit] MISSING dir: $d"; MISS=$((MISS+1)); fi
+          done
+          for f in "${EXPECT_FILES[@]}"; do
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/$f' ]"; then
+              echo "[audit] OK file: $f"
+            else
+              echo "[audit] MISSING file: $f"; MISS=$((MISS+1)); fi
+          done
+          # Try to tail a recent PHP error log if present
+          for cand in php-error.log debug.log error_log; do
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$cand' ]"; then
+              echo "[audit] Tail of wp-content/$cand:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break; fi
+          done
+          echo "[audit] Missing count: $MISS"
+          echo "missing_count=$MISS" >> $GITHUB_OUTPUT
+
+      - name: Stop after audit (audit-only)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.audit == 'true' }}
+        run: |
+          echo "[audit] Audit-only run requested; skipping rsync and marker steps.";
+          exit 0
+
       - name: Rsync to server
+        if: ${{ github.event.inputs.audit != 'true' }}
         run: |
           # Base rsync excludes
           RSYNC_EXCLUDES=(
@@ -86,7 +128,7 @@ jobs:
           DELETE_REMOTE: ${{ secrets.DELETE_REMOTE }}
 
       - name: Optional - Run WP cache flush
-        if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' }}
+        if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' && github.event.inputs.audit != 'true' }}
         run: |
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cd $HOSTINGER_PATH && wp cache flush || true"
         env:
@@ -97,7 +139,7 @@ jobs:
           RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
 
       - name: Record deployment marker
-        if: ${{ success() }}
+        if: ${{ success() && github.event.inputs.audit != 'true' }}
         run: |
           echo "[deploy] Writing .deploy-info.json marker with commit $GITHUB_SHA" 
           if [ -z "$HOSTINGER_PATH" ]; then
@@ -121,7 +163,7 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Post-deploy health check (optional)
-        if: ${{ success() && env.PRODUCTION_URL != '' }}
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
         run: |
           PATH_PART="${HEALTHCHECK_PATH:-/}"
           # Ensure path part starts with /
