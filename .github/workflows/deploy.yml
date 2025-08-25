@@ -231,10 +231,8 @@ jobs:
         run: |
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
-          # Determine if LiteSpeed plugin is disabled (directory renamed) or absent
           LSP_ORIG="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
           LSP_DISABLED="$LSP_ORIG.disabled"
-          # If plugin appears disabled, also neutralize drop-ins referencing LiteSpeed
           if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_DISABLED' ]"; then
             if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_ORIG' ]"; then
               TS=$(date +%s)
@@ -247,7 +245,6 @@ jobs:
           else
             echo "[dropins] LiteSpeed plugin directory not (yet) disabled; skipping drop-in neutralization (still enforcing WP_CACHE=false)."
           fi
-          # Always enforce single clean WP_CACHE=false define to avoid stale caching state.
           ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
           PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
           CFG=""
@@ -263,14 +260,9 @@ jobs:
             echo "[dropins] wp-config.php not found (cannot enforce WP_CACHE)";
           else
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
-              # Execute remote sanitation without heredoc (reduce YAML/heredoc nesting issues)
-              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -c '
-CFG=\"$CFG\"; [ -f \"$CFG\" ] || { echo [dropins][remote] Config missing; exit 0; };
-awk "BEGIN{IGNORECASE=1}{ if (\$0 ~ /define[[:space:]]*\(/ && \$0 ~ /WP_CACHE[\"\']/ && \$0 !~ /WP_CACHE_KEY_SALT/) next; print }" \"$CFG\" > \"$CFG.ci.tmp\" && mv \"$CFG.ci.tmp\" \"$CFG\";
-echo // Managed by CI: force disable page/object cache while troubleshooting >> \"$CFG\";
-echo \"if (!defined('WP_CACHE')) { define('WP_CACHE', false); }\" >> \"$CFG\";
-grep -n WP_CACHE \"$CFG\" | sed 's/^/[dropins][cfg]/' || true
-'" || true
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "awk 'BEGIN{IGNORECASE=1}{ if (\$0 ~ /define[[:space:]]*\(/ && \$0 ~ /WP_CACHE[\"\']/ && \$0 !~ /WP_CACHE_KEY_SALT/) next; print }' '$CFG' > '$CFG.ci.tmp' && mv '$CFG.ci.tmp' '$CFG'" || true
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s\\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> '$CFG'" || true
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n WP_CACHE '$CFG'" | sed 's/^/[dropins][cfg]/' || true
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
