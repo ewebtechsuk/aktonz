@@ -25,6 +25,14 @@ on:
         description: "If true: rsync uses --dry-run (no remote file changes)"
         required: false
         default: "false"
+      toggle_debug:
+        description: "Enable or disable temporary WP_DEBUG (enable|disable|none)"
+        required: false
+        default: "none"
+      debug_minutes:
+        description: "Window (minutes) WP_DEBUG stays active after enabling"
+        required: false
+        default: "15"
 
 jobs:
   deploy:
@@ -236,6 +244,74 @@ jobs:
           # Verify marker on remote
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 200 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
         env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Toggle WP_DEBUG (optional)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.toggle_debug != 'none' && github.event.inputs.toggle_debug != '' }}
+        run: |
+          ACTION="${TOGGLE_DEBUG}"
+          MINUTES="${DEBUG_MINUTES}"
+          if ! echo "$MINUTES" | grep -Eq '^[0-9]+$'; then MINUTES=15; fi
+          if [ "$MINUTES" -lt 1 ]; then MINUTES=15; fi
+          CONFIG_ROOT="$HOSTINGER_PATH/wp-config.php"
+          CONFIG_PARENT="$(dirname "$HOSTINGER_PATH")/wp-config.php"
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$CONFIG_ROOT' ]"; then
+            TARGET="$CONFIG_ROOT"
+          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$CONFIG_PARENT' ]"; then
+            TARGET="$CONFIG_PARENT"
+          else
+            echo "[debug-toggle] wp-config.php not found in root or parent; skipping."; exit 0
+          fi
+          echo "[debug-toggle] Target config: $TARGET (action=$ACTION minutes=$MINUTES)"
+          if [ "$ACTION" = "enable" ]; then
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
+              TMP=\"$TARGET.copilot.tmp\"
+              if grep -q COPILOT_DEBUG_START \"$TARGET\"; then
+                echo \"[remote] Updating existing debug window to $MINUTES min\";
+                # Replace window line
+                sed -E -i \"s/(COPILOT_DEBUG_WINDOW *= *)[0-9]+/\\1$MINUTES/\" \"$TARGET\"
+              else
+                echo \"[remote] Inserting temporary debug snippet ($MINUTES min)\";
+                awk -v M=$MINUTES '
+                  /require_once[[:space:]]+ABSPATH.*wp-settings.php/ {
+                    print "// COPILOT_DEBUG_START";
+                    print "// Auto-inserted by CI for temporary debug window";
+                    print "if (!defined(\\"WP_DEBUG\\")) {";
+                    print "  $COPILOT_DEBUG_WINDOW = " M "; // COPILOT_DEBUG_WINDOW";
+                    print "  $__flag = __DIR__ . \\\"/wp-content/.copilot_debug_start\\\";";
+                    print "  if (!file_exists($__flag)) { @file_put_contents($__flag, time()); }";
+                    print "  $__started = (int) @file_get_contents($__flag);";
+                    print "  if ($__started + ($COPILOT_DEBUG_WINDOW * 60) > time()) {";
+                    print "    define(\\"WP_DEBUG\\", true);";
+                    print "    define(\\"WP_DEBUG_LOG\\", true);";
+                    print "    define(\\"WP_DEBUG_DISPLAY\\", false);";
+                    print "  }";
+                    print "}";
+                    print "// COPILOT_DEBUG_END";
+                  }
+                  { print }' "$TARGET" > "$TMP" && mv "$TMP" "$TARGET"
+              fi
+            '"
+          elif [ "$ACTION" = "disable" ]; then
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
+              if grep -q COPILOT_DEBUG_START \"$TARGET\"; then
+                echo \"[remote] Removing debug snippet\";
+                sed -i '/COPILOT_DEBUG_START/,/COPILOT_DEBUG_END/d' \"$TARGET\"
+              else
+                echo \"[remote] No debug snippet present\";
+              fi
+              # Remove timer file
+              rm -f \"$HOSTINGER_PATH/wp-content/.copilot_debug_start\" 2>/dev/null || true
+            '"
+          else
+            echo "[debug-toggle] Unrecognized action: $ACTION"; exit 1
+          fi
+        env:
+          TOGGLE_DEBUG: ${{ github.event.inputs.toggle_debug }}
+          DEBUG_MINUTES: ${{ github.event.inputs.debug_minutes }}
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
