@@ -261,14 +261,11 @@ jobs:
           else
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
             # Remove any previous CI cache-disable comments and all WP_CACHE defines (except WP_CACHE_KEY_SALT) then append a single clean define
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "awk 'BEGIN{IGNORECASE=1} {
-              if (
-                $0 ~ /^\/\/ Managed by CI:/ ||
-                $0 ~ /^\/\/ Added by CI/ ) next;
-              line=tolower($0);
-              if (line ~ /define[[:space:]]*\(.*wp_cache/ && line !~ /wp_cache_key_salt/) next;
-              print;
-            }' '$CFG' > '$CFG.ci.tmp' && mv '$CFG.ci.tmp' '$CFG'" || true
+        # NOTE: Previous attempt failed because $0 was expanded by the local shell before reaching awk.
+        # We wrap the awk program in single quotes inside an outer double-quoted SSH command so that $0
+        # is preserved for awk (no need to escape as it sits inside single quotes) while $CFG is expanded
+        # locally (we want the resolved path on the remote). We also condense the pattern logic.
+        ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "TMP='$CFG.ci.tmp'; awk 'BEGIN{IGNORECASE=1} !/^\\/\\/ (Managed|Added) by CI/ { l=tolower($0); if (l ~ /define[[:space:]]*\\(.*wp_cache/ && l !~ /wp_cache_key_salt/) next; print }' '$CFG' > \"$TMP\" && mv \"$TMP\" '$CFG'" || true
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s\\n%s\\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> '$CFG'" || true
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n WP_CACHE '$CFG'" | sed 's/^/[dropins][cfg]/' || true
           fi
