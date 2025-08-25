@@ -263,19 +263,14 @@ jobs:
             echo "[dropins] wp-config.php not found (cannot enforce WP_CACHE)";
           else
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
-            # Execute remote sanitation & append via a single SSH here-doc to avoid complex local quoting
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash <<'REMOTE_WPC'
-set -e
-CFG="$CFG"
-if [ ! -f "$CFG" ]; then echo "[dropins][remote] Config vanished mid-run"; exit 0; fi
-# Remove existing WP_CACHE define lines (exclude WP_CACHE_KEY_SALT) case-insensitively
-awk 'BEGIN{IGNORECASE=1} {
-  if ($0 ~ /define[[:space:]]*\(/ && $0 ~ /WP_CACHE['\"']/ && $0 !~ /WP_CACHE_KEY_SALT/) next; print;
-}' "$CFG" > "$CFG.ci.tmp" && mv "$CFG.ci.tmp" "$CFG"
-echo "// Managed by CI: force disable page/object cache while troubleshooting" >> "$CFG"
-echo "if (!defined('WP_CACHE')) { define('WP_CACHE', false); }" >> "$CFG"
-grep -n "WP_CACHE" "$CFG" | sed 's/^/[dropins][cfg]/' || true
-REMOTE_WPC
+              # Execute remote sanitation without heredoc (reduce YAML/heredoc nesting issues)
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -c '
+CFG=\"$CFG\"; [ -f \"$CFG\" ] || { echo [dropins][remote] Config missing; exit 0; };
+awk "BEGIN{IGNORECASE=1}{ if (\$0 ~ /define[[:space:]]*\(/ && \$0 ~ /WP_CACHE[\"\']/ && \$0 !~ /WP_CACHE_KEY_SALT/) next; print }" \"$CFG\" > \"$CFG.ci.tmp\" && mv \"$CFG.ci.tmp\" \"$CFG\";
+echo // Managed by CI: force disable page/object cache while troubleshooting >> \"$CFG\";
+echo \"if (!defined('WP_CACHE')) { define('WP_CACHE', false); }\" >> \"$CFG\";
+grep -n WP_CACHE \"$CFG\" | sed 's/^/[dropins][cfg]/' || true
+'" || true
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
