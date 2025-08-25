@@ -182,20 +182,7 @@ jobs:
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           echo "[prune] Checking for stale litespeed-cache.disabled.* directories"
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -s <<'EOF' || true
-PLUGDIR="$HOSTINGER_PATH/wp-content/plugins"
-cd "$PLUGDIR" 2>/dev/null || { echo '[prune] Plugin dir missing; skip'; exit 0; }
-LIST=$(ls -1d litespeed-cache.disabled.* 2>/dev/null | sort -t. -k4,4n || true)
-[ -z "$LIST" ] && { echo '[prune] Nothing to prune (none found)'; exit 0; }
-COUNT=$(printf '%s' "$LIST" | grep -c litespeed-cache.disabled || true)
-[ -z "$COUNT" ] && COUNT=0
-[ "$COUNT" -le 2 ] && { echo "[prune] Nothing to prune (count=$COUNT)"; exit 0; }
-KEEP=$(printf '%s\n' "$LIST" | tail -n 2)
-echo "[prune] Keeping:"; printf '%s\n' "$KEEP" | sed 's/^/[prune][keep] /'
-TO_DELETE=$(comm -23 <(printf '%s\n' "$LIST") <(printf '%s\n' "$KEEP"))
-echo "[prune] Deleting:"; printf '%s\n' $TO_DELETE | sed 's/^/[prune][del] /'
-for d in $TO_DELETE; do rm -rf -- "$d" || echo "[prune][warn] Failed to remove $d"; done
-EOF
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -c 'cd \"$HOSTINGER_PATH/wp-content/plugins\" 2>/dev/null || { echo [prune] Plugin dir missing; exit 0; }; LIST=\\$(ls -1dt litespeed-cache.disabled.* 2>/dev/null || true); [ -z \"$LIST\" ] && { echo [prune] Nothing to prune; exit 0; }; COUNT=\\$(printf %s \"$LIST\" | wc -l); if [ \"$COUNT\" -le 2 ]; then echo [prune] Nothing to prune \(count=$COUNT\); exit 0; fi; echo \"$LIST\" | sed 's/^/[prune][all] /'; echo \"$LIST\" | tail -n +3 | while read d; do [ -n \"$d\" ] && echo [prune][del] $d && rm -rf -- \"$d\"; done'" || true
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
