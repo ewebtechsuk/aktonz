@@ -33,6 +33,10 @@ on:
         description: "Window (minutes) WP_DEBUG stays active after enabling"
         required: false
         default: "15"
+      disable_plugins:
+        description: "Comma-separated plugin folder slugs to disable (by renaming) before deploy"
+        required: false
+        default: ""
 
 jobs:
   deploy:
@@ -160,6 +164,28 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           AUDIT_INPUT: ${{ github.event.inputs.audit }}
+
+      - name: Disable requested plugins (rename folders)
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.disable_plugins != '' }}
+        run: |
+          LIST="$DISABLE_PLUGINS"
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          IFS=',' read -r -a PLUGS <<<"$LIST"
+          echo "[plugins] Disabling: $LIST"
+          for p in "${PLUGS[@]}"; do
+            p=$(echo "$p" | xargs) # trim
+            [ -z "$p" ] && continue
+            SRC="$HOSTINGER_PATH/wp-content/plugins/$p"
+            DST="$SRC.disabled"
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -d '$SRC' ]; then if [ -d '$DST' ]; then echo '[plugins] Already disabled: $p'; else mv '$SRC' '$DST' && echo '[plugins] Disabled $p'; fi; else echo '[plugins] Not found: $p'; fi" || true
+          done
+        env:
+          DISABLE_PLUGINS: ${{ github.event.inputs.disable_plugins }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Stop after audit (audit-only)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.audit == 'true' }}
