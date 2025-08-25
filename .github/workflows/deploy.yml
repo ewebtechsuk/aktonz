@@ -177,10 +177,13 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Disable requested plugins (rename folders)
-        # Allow disabling via either manual input OR repository secret DISABLE_PLUGINS (works on push events)
-        if: ${{ github.event.inputs.audit != 'true' && (github.event.inputs.disable_plugins != '' || secrets.DISABLE_PLUGINS != '') }}
+        # Runs when not an audit; script itself checks if any list (input or secret) provided
+        if: ${{ github.event.inputs.audit != 'true' }}
         run: |
           # Priority: manual workflow_dispatch input > secret fallback
+            if [ -z "$DISABLE_PLUGINS_INPUT" ] && [ -z "$DISABLE_PLUGINS_SECRET" ]; then
+              echo "[plugins] No disable list provided (input or secret); skipping."; exit 0;
+            fi
             if [ -n "$DISABLE_PLUGINS_INPUT" ]; then
               LIST="$DISABLE_PLUGINS_INPUT"
               SOURCE="input"
