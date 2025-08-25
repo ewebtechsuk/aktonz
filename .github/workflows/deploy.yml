@@ -182,19 +182,20 @@ jobs:
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           echo "[prune] Checking for stale litespeed-cache.disabled.* directories"
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash -c "'set -e
-            PLUGDIR=\"$HOSTINGER_PATH/wp-content/plugins\"
-            cd \"$HOSTINGER_PATH/wp-content/plugins\" 2>/dev/null || exit 0
-            LIST=$(ls -1d litespeed-cache.disabled.* 2>/dev/null | sort -t. -k4,4n || true)
-            COUNT=$(echo \"$LIST\" | grep -c litespeed-cache.disabled || true)
-            if [ -z \"$LIST\" ] || [ $COUNT -le 2 ]; then echo '[prune] Nothing to prune (count='$COUNT')'; exit 0; fi
-            # Keep newest 2 (largest timestamp) -> delete older ones
-            KEEP=$(echo \"$LIST\" | tail -n 2)
-            echo "[prune] Keeping:"; echo "$KEEP" | sed 's/^/[prune][keep] /'
-            TO_DELETE=$(comm -23 <(echo \"$LIST\" | tr ' ' '\n') <(echo \"$KEEP\" | tr ' ' '\n'))
-            echo "[prune] Deleting:"; echo "$TO_DELETE" | sed 's/^/[prune][del] /'
-            for d in $TO_DELETE; do rm -rf -- "$d" || echo '[prune][warn] Failed to remove '$d; done
-          '" || true
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash <<'PRUNE' || true
+set -e
+cd "$HOSTINGER_PATH/wp-content/plugins" 2>/dev/null || { echo '[prune] Plugin dir missing; skip'; exit 0; }
+LIST=$(ls -1d litespeed-cache.disabled.* 2>/dev/null | sort -t. -k4,4n || true)
+if [ -z "$LIST" ]; then echo '[prune] Nothing to prune (none found)'; exit 0; fi
+COUNT=$(printf '%s' "$LIST" | grep -c litespeed-cache.disabled || true)
+[ -z "$COUNT" ] && COUNT=0
+if [ "$COUNT" -le 2 ]; then echo "[prune] Nothing to prune (count=$COUNT)"; exit 0; fi
+KEEP=$(printf '%s\n' "$LIST" | tail -n 2)
+echo "[prune] Keeping:"; printf '%s\n' "$KEEP" | sed 's/^/[prune][keep] /'
+TO_DELETE=$(comm -23 <(printf '%s\n' "$LIST") <(printf '%s\n' "$KEEP"))
+echo "[prune] Deleting:"; printf '%s\n' $TO_DELETE | sed 's/^/[prune][del] /'
+for d in $TO_DELETE; do rm -rf -- "$d" || echo "[prune][warn] Failed to remove $d"; done
+PRUNE
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
@@ -275,15 +276,19 @@ jobs:
             echo "[dropins] wp-config.php not found (cannot enforce WP_CACHE)";
           else
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
-            # Remove any existing WP_CACHE constant definitions but keep WP_CACHE_KEY_SALT (match literal constant name only)
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if grep -Eq 'define[[:space:]]*\([^)]*['\\"']WP_CACHE['\\"']' '$CFG'; then sed -i.bak -E "/define[[:space:]]*\\([^)]*['\\\"]WP_CACHE['\\\"]/d" '$CFG' && echo '[dropins] Removed existing WP_CACHE define(s)'; fi" || true
-            # Append clean definition using a local temp file piped to SSH (simplest, avoids complex quoting)
-            printf '%s\n' "// Managed by CI: force disable page/object cache while troubleshooting" "if (!defined('WP_CACHE')) { define('WP_CACHE', false); }" > wp_cache_snippet.txt
-            cat wp_cache_snippet.txt | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat >> '$CFG'" || true
-            rm -f wp_cache_snippet.txt || true
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo '[dropins] Appended clean WP_CACHE=false definition'" || true
-            # Show resulting lines referencing WP_CACHE (including potential key salt)
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n 'WP_CACHE' '$CFG' | sed 's/^/[dropins][cfg]/' || true" || true
+            # Execute remote sanitation & append via a single SSH here-doc to avoid complex local quoting
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" bash <<'REMOTE_WPC'
+set -e
+CFG="$CFG"
+if [ ! -f "$CFG" ]; then echo "[dropins][remote] Config vanished mid-run"; exit 0; fi
+# Remove existing WP_CACHE define lines (exclude WP_CACHE_KEY_SALT) case-insensitively
+awk 'BEGIN{IGNORECASE=1} {
+  if ($0 ~ /define[[:space:]]*\(/ && $0 ~ /WP_CACHE['\"']/ && $0 !~ /WP_CACHE_KEY_SALT/) next; print;
+}' "$CFG" > "$CFG.ci.tmp" && mv "$CFG.ci.tmp" "$CFG"
+echo "// Managed by CI: force disable page/object cache while troubleshooting" >> "$CFG"
+echo "if (!defined('WP_CACHE')) { define('WP_CACHE', false); }" >> "$CFG"
+grep -n "WP_CACHE" "$CFG" | sed 's/^/[dropins][cfg]/' || true
+REMOTE_WPC
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
