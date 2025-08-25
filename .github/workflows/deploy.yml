@@ -50,17 +50,32 @@ jobs:
           ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit-pre] SSH failed"; exit 1; }
           echo "[audit-pre] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
           MISS=0
+          REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'") || REMOTE_LIST=""
+          printf '%s' "$REMOTE_LIST" > remote_listing.txt
+          echo "[audit-pre][debug] Remote path bytes:"; printf '%s' "$HOSTINGER_PATH" | od -An -tx1 | sed 's/^/[hex]/'
           for d in "${EXPECT_DIRS[@]}"; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]"; then
-              echo "[audit-pre] OK dir: $d"
+            if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
+              echo "[audit-pre] OK dir(listing): $d"
             else
-              echo "[audit-pre] MISSING dir: $d"; MISS=$((MISS+1)); fi
+              # Fallback test directly
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
+                echo "[audit-pre] OK dir(test): $d"
+              else
+                echo "[audit-pre] MISSING dir: $d"; MISS=$((MISS+1));
+                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -ld '$HOSTINGER_PATH' || true" | sed 's/^/[audit-pre][parent]/'
+              fi
+            fi
           done
           for f in "${EXPECT_FILES[@]}"; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/$f\" ]"; then
-              echo "[audit-pre] OK file: $f"
+            if grep -Fxq "$f" <<<"$REMOTE_LIST"; then
+              echo "[audit-pre] OK file(listing): $f"
             else
-              echo "[audit-pre] MISSING file: $f"; MISS=$((MISS+1)); fi
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/$f' ]" 2>/dev/null; then
+                echo "[audit-pre] OK file(test): $f"
+              else
+                echo "[audit-pre] MISSING file: $f"; MISS=$((MISS+1));
+              fi
+            fi
           done
           # Try to tail a recent PHP error log if present
           for cand in php-error.log debug.log error_log; do
@@ -192,11 +207,16 @@ jobs:
           echo "[audit-post] Verifying critical directories after deployment"
           EXPECT_DIRS=(core storage wp-admin wp-includes wp-content)
           MISS=0
+          REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'") || REMOTE_LIST=""
           for d in "${EXPECT_DIRS[@]}"; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]"; then
-              echo "[audit-post] OK dir: $d"
+            if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
+              echo "[audit-post] OK dir(listing): $d"
             else
-              echo "[audit-post] MISSING dir: $d"; MISS=$((MISS+1)); fi
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
+                echo "[audit-post] OK dir(test): $d"
+              else
+                echo "[audit-post] MISSING dir: $d"; MISS=$((MISS+1)); fi
+            fi
           done
           if [ "$MISS" -gt 0 ]; then
             echo "[audit-post] WARNING: $MISS directory(ies) still missing. Restore from backup before enabling delete."; fi
