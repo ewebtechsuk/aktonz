@@ -262,7 +262,7 @@ jobs:
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
             # Remove any previous CI cache-disable comments and all WP_CACHE defines (except WP_CACHE_KEY_SALT) then append a single clean define
             # NOTE: Avoid local shell expansion of $0 inside awk; keep awk program in single quotes within outer double-quoted SSH command.
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "TMP='$CFG.ci.tmp'; awk 'BEGIN{IGNORECASE=1} !/^\\/\\/ (Managed|Added) by CI/ { l=tolower($0); if (l ~ /define[[:space:]]*\\(.*wp_cache/ && l !~ /wp_cache_key_salt/) next; print }' '$CFG' > \"$TMP\" && mv \"$TMP\" '$CFG'" || true
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "FILE='$CFG'; TMP='${CFG}.ci.tmp'; sed -E -e '/^\\/\\/ (Managed|Added) by CI/d' -e '/[dD]efine[[:space:]]*\\([^)]*WP_CACHE[^)]*\\)/{ /WP_CACHE_KEY_SALT/!d }' \"$FILE\" > \"$TMP\" && mv \"$TMP\" \"$FILE\"" || true
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s\\n%s\\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> '$CFG'" || true
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n WP_CACHE '$CFG'" | sed 's/^/[dropins][cfg]/' || true
           fi
