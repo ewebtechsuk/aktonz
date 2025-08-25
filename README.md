@@ -58,6 +58,7 @@ phpMyAdmin: http://localhost:8081
 scripts/codex.sh help                 # list all commands
 scripts/codex.sh status               # container + WP status
 scripts/codex.sh logs                 # tail WP logs
+scripts/codex.sh doctor               # diagnose docker/ports/perms
 scripts/codex.sh wp plugin list       # arbitrary wp-cli
 scripts/codex.sh backup-db            # gzip DB dump
 scripts/codex.sh restore-db dump.sql.gz
