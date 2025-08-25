@@ -91,20 +91,14 @@ jobs:
           COMMIT="$GITHUB_SHA"
             STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           JSON=$(printf '{"commit":"%s","deployed_at":"%s","source":"github_actions"}' "$COMMIT" "$STAMP")
-          echo "$JSON" > .deploy-info.json || { echo '[error] Failed to create local marker'; exit 1; }
           REMOTE_DIR="${HOSTINGER_PATH%/}"
-          # Try scp first (simpler quoting), fallback to ssh printf if scp unavailable
-          if command -v scp >/dev/null 2>&1; then
-            scp -P "$HOSTINGER_SSH_PORT" .deploy-info.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_DIR/.deploy-info.json" \
-              || {
-                echo '[warn] scp failed; attempting ssh printf fallback';
-                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s' '$JSON' > '$REMOTE_DIR/.deploy-info.json'" || { echo '[error] Both scp and ssh fallback failed'; exit 1; };
-              }
-          else
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "printf '%s' '$JSON' > '$REMOTE_DIR/.deploy-info.json'" || { echo '[error] ssh write failed'; exit 1; }
-          fi
+          echo "[deploy] Remote dir (length $(printf '%s' "$REMOTE_DIR" | wc -c))"
+          printf '%s' "$JSON" | sha256sum | awk '{print "[deploy] Marker sha256 " $1}'
+          # Create directory then stream JSON via stdin to avoid quoting issues
+          printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
+            || { echo '[error] Failed to stream marker to remote'; exit 1; }
           # Verify marker on remote
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s '$REMOTE_DIR/.deploy-info.json' && head -c 200 '$REMOTE_DIR/.deploy-info.json'" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 200 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
