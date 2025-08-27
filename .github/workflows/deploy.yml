@@ -489,6 +489,42 @@ jobs:
           DELETE_REMOTE: ${{ secrets.DELETE_REMOTE }}
           DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
 
+      - name: Collect deployment metadata (remote state)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        id: meta
+        run: |
+          set -e
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          PLUGIN_DIR="$HOSTINGER_PATH/wp-content/plugins"
+          DISABLED_PLUGINS_JSON='[]'
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$PLUGIN_DIR' ]"; then
+            RAW_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUGIN_DIR' 2>/dev/null" | grep -E '(\\.disabled(\\.[0-9]+)?$|^_off_)' || true)
+            if [ -n "$RAW_LIST" ]; then
+              ITEMS=""
+              while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                if [ -z "$ITEMS" ]; then ITEMS="\"$line\""; else ITEMS="$ITEMS,\"$line\""; fi
+              done <<< "$RAW_LIST"
+              DISABLED_PLUGINS_JSON="[$ITEMS]"
+            fi
+          fi
+          echo "[meta] Disabled plugin variant folders: $DISABLED_PLUGINS_JSON"
+          echo "DISABLED_PLUGINS_JSON=$DISABLED_PLUGINS_JSON" >> $GITHUB_ENV
+          LSP_COUNT=0
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$PLUGIN_DIR' ]"; then
+            LSP_COUNT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUGIN_DIR' 2>/dev/null" | grep -Ec '^litespeed-cache\.disabled(\.[0-9]+)?$|^_off_litespeed-cache$' || true)
+          fi
+          echo "[meta] LiteSpeed disabled variant count: $LSP_COUNT"
+          echo "LITESPEED_DISABLED_VARIANTS=$LSP_COUNT" >> $GITHUB_ENV
+          SHORT_SHA=${GITHUB_SHA::7}
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_ENV
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Optional - Run WP cache flush
         if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
@@ -503,23 +539,28 @@ jobs:
       - name: Record deployment marker
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
-          echo "[deploy] Writing .deploy-info.json marker with commit $GITHUB_SHA" 
-          if [ -z "$HOSTINGER_PATH" ]; then
-            echo "[error] HOSTINGER_PATH not set"; exit 1;
-          fi
+          echo "[deploy] Writing enriched .deploy-info.json marker with commit $GITHUB_SHA" 
+          if [ -z "$HOSTINGER_PATH" ]; then echo "[error] HOSTINGER_PATH not set"; exit 1; fi
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           COMMIT="$GITHUB_SHA"
-            STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          JSON=$(printf '{"commit":"%s","deployed_at":"%s","source":"github_actions"}' "$COMMIT" "$STAMP")
+          SHORT="${SHORT_SHA:-${GITHUB_SHA::7}}"
+          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          DISABLED_PLUGINS_JSON=${DISABLED_PLUGINS_JSON:-[]}
+          CFG_LINES_SAFE=${CFG_LINES:-0}
+          CFG_RECOVERED_SAFE=${CFG_RECOVERED:-false}
+          CFG_RECOVER_SRC_SAFE="${CFG_RECOVER_SRC:-}"
+          LSP_VARIANTS=${LITESPEED_DISABLED_VARIANTS:-0}
+          if [ -n "$CFG_RECOVER_SRC_SAFE" ]; then RECOVER_SRC_JSON="\"$CFG_RECOVER_SRC_SAFE\""; else RECOVER_SRC_JSON="null"; fi
+          DISABLED_COUNT=$(echo "$DISABLED_PLUGINS_JSON" | grep -o '"' | wc -l | awk '{print $1/2}')
+          JSON=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s}' \
+            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS")
           REMOTE_DIR="${HOSTINGER_PATH%/}"
-          echo "[deploy] Remote dir (length $(printf '%s' "$REMOTE_DIR" | wc -c))"
+          echo "[deploy] Marker JSON size: $(printf '%s' "$JSON" | wc -c) bytes"
           printf '%s' "$JSON" | sha256sum | awk '{print "[deploy] Marker sha256 " $1}'
-          # Create directory then stream JSON via stdin to avoid quoting issues
           printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
             || { echo '[error] Failed to stream marker to remote'; exit 1; }
-          # Verify marker on remote
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 200 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 400 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
