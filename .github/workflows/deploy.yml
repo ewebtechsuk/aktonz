@@ -235,14 +235,25 @@ jobs:
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           LSP_ORIG="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
-          LSP_DISABLED="$LSP_ORIG.disabled"
-          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_DISABLED' ]"; then
+          LSP_DISABLED_BASE="$LSP_ORIG.disabled"
+          # Consider LiteSpeed 'disabled' if any of these exist:
+          #  - litespeed-cache.disabled (base)
+          #  - litespeed-cache.disabled.<timestamp>
+          #  - _off_litespeed-cache
+          #  - litespeed-cache.disabled.* (general)
+          LSP_DISABLED_DETECTED=0
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$(dirname "$LSP_ORIG")' 2>/dev/null | grep -Eq '^litespeed-cache\.disabled(\.[0-9]+)?$'"; then
+            LSP_DISABLED_DETECTED=1
+          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$(dirname "$LSP_ORIG")/_off_litespeed-cache' ]"; then
+            LSP_DISABLED_DETECTED=1
+          fi
+          if [ $LSP_DISABLED_DETECTED -eq 1 ]; then
             if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LSP_ORIG' ]"; then
               TS=$(date +%s)
-              echo "[dropins] Conflict: both litespeed-cache and litespeed-cache.disabled exist. Force-renaming active copy -> litespeed-cache.disabled.$TS"
+              echo "[dropins] Conflict: active litespeed-cache plus disabled variant(s). Force-renaming active copy -> litespeed-cache.disabled.$TS"
               ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mv '$LSP_ORIG' '$LSP_ORIG.disabled.$TS'" || echo "[dropins][warn] Force rename failed (permissions?)"
             fi
-            echo "[dropins] LiteSpeed treated as disabled; neutralizing related drop-ins..."
+            echo "[dropins] LiteSpeed considered disabled (variant detected); neutralizing related drop-ins..."
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/object-cache.php' ] && grep -qi litespeed '$HOSTINGER_PATH/wp-content/object-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/object-cache.php' '$HOSTINGER_PATH/wp-content/object-cache.php.disabled' && echo '[dropins] Disabled object-cache.php (LiteSpeed)'; else echo '[dropins] object-cache.php absent or no LiteSpeed signature'; fi" || true
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' ]; then if grep -qi litespeed '$HOSTINGER_PATH/wp-content/advanced-cache.php'; then mv -f '$HOSTINGER_PATH/wp-content/advanced-cache.php' '$HOSTINGER_PATH/wp-content/advanced-cache.php.disabled' && echo '[dropins] Renamed advanced-cache.php -> advanced-cache.php.disabled'; else echo '[dropins] advanced-cache.php present but no LiteSpeed signature'; fi; else echo '[dropins] No advanced-cache.php present'; fi" || true
           else
