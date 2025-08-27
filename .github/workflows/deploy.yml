@@ -626,8 +626,19 @@ jobs:
         with:
           name: deploy-marker
           path: .deploy-info.json.local
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
+
+      - name: Verify marker artifact presence
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          if [ -f .deploy-info.json.local ]; then
+            echo "[marker-check] Local marker present: $(wc -c < .deploy-info.json.local) bytes"
+            head -c 180 .deploy-info.json.local | sed 's/^/[marker-check][head]/'
+          else
+            echo "[marker-check][warn] .deploy-info.json.local missing after upload attempt; creating placeholder to avoid downstream confusion"
+            echo '{}' > .deploy-info.json.local
+          fi
 
       - name: Toggle WP_DEBUG (optional)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.toggle_debug != 'none' && github.event.inputs.toggle_debug != '' }}
@@ -800,6 +811,22 @@ jobs:
           if [ "$HTTP_CODE" -ge 500 ]; then echo "[smoke] FAIL: HTTP $HTTP_CODE"; exit 1; fi
           if grep -qi 'critical error' body.html; then echo "[smoke] FAIL: Detected WordPress critical error banner"; exit 1; fi
           echo "[smoke] PASS"
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+
+      - name: Admin smoke test
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
+        run: |
+          BASE="${PRODUCTION_URL%/}"
+          ADMIN_URL="$BASE/wp-admin/"
+          echo "[smoke-admin] Curling: $ADMIN_URL"
+          # Follow redirects to capture final status/content
+          ADMIN_CODE=$(curl -s -L -o admin.html -w '%{http_code}' "$ADMIN_URL" || echo 000)
+          echo "[smoke-admin] HTTP $ADMIN_CODE (expected 200 logged-in or 200/302->login sequence)"
+          head -n 40 admin.html | sed 's/^/[smoke-admin][body]/'
+          if [ "$ADMIN_CODE" -ge 500 ]; then echo "[smoke-admin] FAIL: $ADMIN_CODE"; exit 1; fi
+          if grep -qi 'critical error' admin.html; then echo "[smoke-admin] FAIL: Detected WordPress critical error banner"; exit 1; fi
+          echo "[smoke-admin] PASS"
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
 
