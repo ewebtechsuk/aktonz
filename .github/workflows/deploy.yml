@@ -264,13 +264,16 @@ jobs:
             echo "[dropins] wp-config.php not found (cannot enforce WP_CACHE)";
           else
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
-            # Simplified sanitation (correct variable expansion):
-            # 1. Show BEFORE lines containing WP_CACHE
-            # 2. Remove any prior CI comment lines and any WP_CACHE defines (case-insensitive)
-            # 3. Append a single managed define block (idempotent)
-            # 4. Show FINAL lines (should be exactly one WP_CACHE define)
-            # Remote inline sanitation: remove prior CI markers and all WP_CACHE defines (any quoting), then append managed define
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "F='$CFG'; if [ ! -f \"$F\" ] || [ ! -s \"$F\" ]; then echo '[dropins][cfg] File missing or empty:' \"$F\"; exit 0; fi; echo '[dropins][cfg] (remote) evaluating file:' \"$F\"; echo '[dropins][cfg] BEFORE:'; grep -n -i WP_CACHE \"$F\" || echo '[dropins][cfg] (none)'; TMP=\"$F.ci.strip\"; awk 'BEGIN{IGNORECASE=1} /WP_CACHE/ {next} {print}' \"$F\" > \"$TMP\" && mv \"$TMP\" \"$F\"; sed -i -E '/^[[:space:]]*\\/[[:space:]]+(Managed|Added) by CI/d' \"$F\"; echo '// Managed by CI: force disable page/object cache while troubleshooting' >> \"$F\"; echo 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> \"$F\"; echo '[dropins][cfg] AFTER CLEAN:'; grep -n -i WP_CACHE \"$F\" || echo '[dropins][cfg] (unexpected none)';" || echo "[dropins][cfg] Remote sanitation failed"
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "TARGET='$CFG'; \
+              if [ -z \"$TARGET\" ] || [ ! -f \"$TARGET\" ]; then echo '[dropins][cfg] Missing file: '$TARGET; exit 0; fi; \
+              if [ ! -s \"$TARGET\" ]; then echo '[dropins][cfg] Empty file: '$TARGET; exit 0; fi; \
+              echo '[dropins][cfg] (remote) evaluating file: '$TARGET; \
+              echo '[dropins][cfg] BEFORE:'; grep -n -i WP_CACHE \"$TARGET\" || echo '[dropins][cfg] (none)'; \
+              tmp=\"$TARGET.ci.strip\"; awk 'BEGIN{IGNORECASE=1} /WP_CACHE/ {next} {print}' \"$TARGET\" > \"$tmp\" && mv \"$tmp\" \"$TARGET\"; \
+              sed -i -E '/^[[:space:]]*\\/\\/[[:space:]]+(Managed|Added) by CI/d' \"$TARGET\"; \
+              echo '// Managed by CI: force disable page/object cache while troubleshooting' >> \"$TARGET\"; \
+              echo 'if (!defined("WP_CACHE")) { define("WP_CACHE", false); }' >> \"$TARGET\"; \
+              echo '[dropins][cfg] AFTER CLEAN:'; grep -n -i WP_CACHE \"$TARGET\" || echo '[dropins][cfg] (unexpected none)'" || echo "[dropins][cfg] Remote sanitation failed (exit $?)"
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
