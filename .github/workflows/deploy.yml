@@ -55,71 +55,62 @@ jobs:
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+
+      - name: Pre-audit remote environment
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
         run: |
           echo "[audit-pre] Starting pre-audit (event=${GITHUB_EVENT_NAME} audit_input=${AUDIT_INPUT:-n/a})"
           if [ -z "$HOSTINGER_PATH" ]; then echo "[audit-pre] HOSTINGER_PATH secret missing"; exit 1; fi
-          # Sanitize HOSTINGER_PATH (remove trailing CR/LF/whitespace) to avoid newline in path causing false negatives
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
-          if [ "$CLEAN_PATH" != "$HOSTINGER_PATH" ]; then
-            echo "[audit-pre] Trimmed HOSTINGER_PATH -> '$CLEAN_PATH' (raw had trailing whitespace)"
-          fi
+          if [ "$CLEAN_PATH" != "$HOSTINGER_PATH" ]; then echo "[audit-pre] Trimmed HOSTINGER_PATH -> '$CLEAN_PATH' (raw had trailing whitespace)"; fi
           HOSTINGER_PATH="$CLEAN_PATH"
-          # Distinguish required vs optional dirs. "core" and "storage" were previously treated as required
-          # but they are not standard WordPress core directories; treat them as optional so their absence
-          # doesn't inflate the missing count.
           REQUIRED_DIRS=(wp-admin wp-includes wp-content)
           OPTIONAL_DIRS=(core storage)
           EXPECT_FILES=(index.php wp-load.php)
           ssh -o BatchMode=yes -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] reachable' || { echo "[audit-pre] SSH failed"; exit 1; }
           echo "[audit-pre] Top-level contents:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A $HOSTINGER_PATH" | sed 's/^/[ls]/'
           MISS=0
-          # wp-config.php may live either in the root or one directory above for mild hardening.
-          # Check after initializing MISS so missing config increments properly.
-          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/wp-config.php\" ]" 2>/dev/null; then
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-config.php' ]" 2>/dev/null; then
             echo "[audit-pre] OK config: wp-config.php (root)"
-          elif PARENT_DIR=$(dirname "$HOSTINGER_PATH"); ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$PARENT_DIR/wp-config.php\" ]" 2>/dev/null; then
+          elif PARENT_DIR=$(dirname "$HOSTINGER_PATH"); ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_DIR/wp-config.php' ]" 2>/dev/null; then
             echo "[audit-pre] OK config: wp-config.php (parent directory)"
           else
             echo "[audit-pre] MISSING config: wp-config.php (neither root nor parent)"; MISS=$((MISS+1));
-            # Fallback heuristic search to help operator correct HOSTINGER_PATH secret if mis-pointed
             BASE_DIR=$(dirname "$HOSTINGER_PATH")
             echo "[audit-pre][hint] Searching nearby directories (maxdepth 4) for wp-config.php to suggest correct path..."
-            CANDIDATES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find \"$BASE_DIR\" -maxdepth 4 -type f -name wp-config.php 2>/dev/null | sort" || true)
+            CANDIDATES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find '$BASE_DIR' -maxdepth 4 -type f -name wp-config.php 2>/dev/null | sort" || true)
             if [ -n "$CANDIDATES" ]; then
               echo "$CANDIDATES" | sed 's/^/[audit-pre][hint][found] /'
-              # If exactly one candidate, propose exporting as corrected path
               ONE_COUNT=$(echo "$CANDIDATES" | wc -l | tr -d ' ')
-              if [ "$ONE_COUNT" = "1" ]; then
-                SUGGESTED=$(dirname "$CANDIDATES")
-                echo "[audit-pre][hint] Consider updating HOSTINGER_PATH secret to: $SUGGESTED"
-              fi
+              [ "$ONE_COUNT" = "1" ] && SUGGESTED=$(dirname "$CANDIDATES") && echo "[audit-pre][hint] Consider updating HOSTINGER_PATH secret to: $SUGGESTED"
             else
               echo "[audit-pre][hint] No wp-config.php found within 4 levels of $BASE_DIR"
             fi
           fi
-          REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A \"$HOSTINGER_PATH\"") || REMOTE_LIST=""
+          REMOTE_LIST=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$HOSTINGER_PATH'" ) || REMOTE_LIST=""
           printf '%s' "$REMOTE_LIST" > remote_listing.txt
           echo "[audit-pre][debug] Remote path bytes:"; printf '%s' "$HOSTINGER_PATH" | od -An -tx1 | sed 's/^/[hex]/'
-          # Required directories
           for d in "${REQUIRED_DIRS[@]}"; do
             if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
               echo "[audit-pre] OK dir(listing): $d"
             else
-              # Fallback test directly
-              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]" 2>/dev/null; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
                 echo "[audit-pre] OK dir(test): $d"
               else
-                echo "[audit-pre] MISSING dir: $d"; MISS=$((MISS+1));
+                echo "[audit-pre] MISSING dir: $d"; MISS=$((MISS+1))
                 ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -ld '$HOSTINGER_PATH' || true" | sed 's/^/[audit-pre][parent]/'
               fi
             fi
           done
-          # Optional directories (informational only)
           for d in "${OPTIONAL_DIRS[@]}"; do
             if grep -Fxq "$d" <<<"$REMOTE_LIST"; then
               echo "[audit-pre] OK optional dir(listing): $d"
             else
-              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d \"$HOSTINGER_PATH/$d\" ]" 2>/dev/null; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$HOSTINGER_PATH/$d' ]" 2>/dev/null; then
                 echo "[audit-pre] OK optional dir(test): $d"
               else
                 echo "[audit-pre] OPTIONAL dir missing (ignored): $d"
@@ -130,26 +121,20 @@ jobs:
             if grep -Fxq "$f" <<<"$REMOTE_LIST"; then
               echo "[audit-pre] OK file(listing): $f"
             else
-              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/$f\" ]" 2>/dev/null; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/$f' ]" 2>/dev/null; then
                 echo "[audit-pre] OK file(test): $f"
               else
-                echo "[audit-pre] MISSING file: $f"; MISS=$((MISS+1));
+                echo "[audit-pre] MISSING file: $f"; MISS=$((MISS+1))
               fi
             fi
           done
-          # Try to tail a recent PHP error log if present
           for cand in php-error.log debug.log error_log; do
-            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f \"$HOSTINGER_PATH/wp-content/$cand\" ]"; then
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$cand' ]"; then
               echo "[audit-pre] Tail of wp-content/$cand:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break; fi
           done
           echo "[audit-pre] Missing count: $MISS"
           echo "missing_count=$MISS" >> $GITHUB_OUTPUT
-          if [ "$MISS" -gt 0 ]; then
-            echo "[audit-pre] WARNING: $MISS required path(s) missing.";
-          fi
-        env:
-          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
-          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          [ "$MISS" -gt 0 ] && echo "[audit-pre] WARNING: $MISS required path(s) missing."
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           AUDIT_INPUT: ${{ github.event.inputs.audit }}
