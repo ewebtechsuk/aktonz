@@ -276,19 +276,20 @@ jobs:
             echo "[dropins] Sanitizing WP_CACHE defines in: $CFG"
             # Create timestamped backup before modifying (retain last 5)
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$CFG' ]; then TS=\$(date +%s); cp '$CFG' '$CFG.ci.bak.'\"\$TS\"; ls -1t '$CFG.ci.bak.'* 2>/dev/null | tail -n +6 | xargs -r rm -f --; fi" || echo '[dropins][cfg] Backup step failed (proceeding)'
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'TARGET='"$CFG"'; \
-              if [ -z "$TARGET" ] || [ ! -f "$TARGET" ]; then echo "[dropins][cfg] Missing file: $TARGET"; exit 0; fi; \
-              if [ ! -s "$TARGET" ]; then echo "[dropins][cfg] Empty file: $TARGET"; exit 0; fi; \
-              LINES_BEFORE=\$(wc -l < "$TARGET" 2>/dev/null || echo 0); SIZE_BEFORE=\$(stat -c %s "$TARGET" 2>/dev/null || echo 0); \
-              echo "[dropins][cfg] (remote) evaluating file: $TARGET (lines=$LINES_BEFORE size=$SIZE_BEFORE)"; \
-              echo "[dropins][cfg] BEFORE:"; grep -n -i WP_CACHE "$TARGET" || echo "[dropins][cfg] (none)"; \
-              tmp="$TARGET.ci.strip"; awk 'BEGIN{IGNORECASE=1} /WP_CACHE/ {next} {print}' "$TARGET" > "$tmp" && mv "$tmp" "$TARGET"; \
-              sed -i -E "/^[[:space:]]*\\/[\/][[:space:]]+(Managed|Added) by CI/d" "$TARGET"; \
-              echo "// Managed by CI: force disable page/object cache while troubleshooting" >> "$TARGET"; \
-              echo "if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }" >> "$TARGET"; \
-              LINES_AFTER=\$(wc -l < "$TARGET" 2>/dev/null || echo 0); SIZE_AFTER=\$(stat -c %s "$TARGET" 2>/dev/null || echo 0); \
-              echo "[dropins][cfg] AFTER CLEAN (lines=$LINES_AFTER size=$SIZE_AFTER):"; grep -n -i WP_CACHE "$TARGET" || echo "[dropins][cfg] (unexpected none)"; \
-              if [ "$LINES_AFTER" -lt 20 ] && [ "$LINES_BEFORE" -gt 20 ]; then echo "[dropins][cfg][warn] Line count dropped suspiciously (restoring backup)"; LAST_BAK=\$(ls -1t "$TARGET.ci.bak."* 2>/dev/null | head -n1); [ -n "$LAST_BAK" ] && cp "$LAST_BAK" "$TARGET" && echo "[dropins][cfg] Restored from $LAST_BAK"; fi' || echo "[dropins][cfg] Remote sanitation failed (exit $?)"
+            # Remote sanitation (escaped inline script)
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "TARGET='$CFG'; \
+              if [ -z \"\$TARGET\" ] || [ ! -f \"\$TARGET\" ]; then echo '[dropins][cfg] Missing file: '\$TARGET; exit 0; fi; \
+              if [ ! -s \"\$TARGET\" ]; then echo '[dropins][cfg] Empty file: '\$TARGET; exit 0; fi; \
+              [ -f \"\$TARGET.ci.tmp\" ] && echo '[dropins][cfg] Removing stray temp: '\$TARGET.ci.tmp && rm -f \"\$TARGET.ci.tmp\" || true; \
+              LINES_BEFORE=\$(wc -l < \"\$TARGET\" 2>/dev/null || echo 0); SIZE_BEFORE=\$(stat -c %s \"\$TARGET\" 2>/dev/null || echo 0); \
+              echo '[dropins][cfg] (remote) evaluating file: '\$TARGET' (lines='\$LINES_BEFORE' size='\$SIZE_BEFORE')'; \
+              echo '[dropins][cfg] BEFORE:'; grep -n -i WP_CACHE \"\$TARGET\" || echo '[dropins][cfg] (none)'; \
+              tmp=\"\$TARGET.ci.strip\"; awk 'BEGIN{IGNORECASE=1} /WP_CACHE/ {next} {print}' \"\$TARGET\" > \"\$tmp\" && mv \"\$tmp\" \"\$TARGET\"; \
+              sed -i -E '/^[[:space:]]*\\/\\/[[:space:]]+(Managed|Added) by CI/d' \"\$TARGET\"; \
+              printf '%s\n' '// Managed by CI: force disable page/object cache while troubleshooting' 'if (!defined(\"WP_CACHE\")) { define(\"WP_CACHE\", false); }' >> \"\$TARGET\"; \
+              LINES_AFTER=\$(wc -l < \"\$TARGET\" 2>/dev/null || echo 0); SIZE_AFTER=\$(stat -c %s \"\$TARGET\" 2>/dev/null || echo 0); \
+              echo '[dropins][cfg] AFTER CLEAN (lines='\$LINES_AFTER' size='\$SIZE_AFTER'):'; grep -n -i WP_CACHE \"\$TARGET\" || echo '[dropins][cfg] (unexpected none)'; \
+              if [ \"\$LINES_AFTER\" -lt 20 ] && [ \"\$LINES_BEFORE\" -gt 20 ]; then echo '[dropins][cfg][warn] Line count dropped suspiciously (restoring backup)'; LAST_BAK=\$(ls -1t \"\$TARGET.ci.bak.\"* 2>/dev/null | head -n1); [ -n \"\$LAST_BAK\" ] && cp \"\$LAST_BAK\" \"\$TARGET\" && echo '[dropins][cfg] Restored from '\$LAST_BAK; fi" || echo "[dropins][cfg] Remote sanitation failed (exit $?)"
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
