@@ -42,6 +42,10 @@ jobs:
   deploy:
     name: Sync files to Hostinger
     runs-on: ubuntu-latest
+    env:
+      # Expose production URL at job level so conditional smoke tests (if: uses env.PRODUCTION_URL) evaluate correctly.
+      # Previously only set at step-level, causing env.PRODUCTION_URL to be empty in condition context and skipping metrics.
+      PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
