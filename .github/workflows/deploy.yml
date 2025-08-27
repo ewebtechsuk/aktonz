@@ -176,7 +176,7 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Prune stale LiteSpeed disabled copies (keep newest 2)
-        if: ${{ github.event.inputs.audit != 'true' }}
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
@@ -193,8 +193,8 @@ jobs:
           RETAIN_DISABLED_LITESPEED: ${{ secrets.RETAIN_DISABLED_LITESPEED }}
 
       - name: Disable requested plugins (rename folders)
-        # Runs when not an audit; script itself checks if any list (input or secret) provided
-        if: ${{ github.event.inputs.audit != 'true' }}
+        # Skip during audit-only or dry-run (dry-run should not mutate remote)
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
           # Priority: manual workflow_dispatch input > secret fallback
             if [ -z "$DISABLE_PLUGINS_INPUT" ] && [ -z "$DISABLE_PLUGINS_SECRET" ]; then
@@ -230,7 +230,7 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Neutralize cache drop-ins if LiteSpeed disabled
-        if: ${{ github.event.inputs.audit != 'true' }}
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
@@ -317,7 +317,7 @@ jobs:
           echo "[audit] Audit-only run requested; skipping rsync and marker steps.";
           exit 0
 
-      - name: Rsync to server
+      - name: Rsync to server (supports dry run)
         if: ${{ github.event.inputs.audit != 'true' }}
         run: |
           # Base rsync excludes
@@ -365,9 +365,14 @@ jobs:
           else
             echo "[deploy] Remote deletion disabled (safer sync). Set secret DELETE_REMOTE=true to enable."
           fi
-          rsync -az -e "ssh -p $HOSTINGER_SSH_PORT" $DELETE_FLAG $EXCLUDE_ARGS ./ "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH" || { echo "[error] rsync failed"; exit 1; }
+          RSYNC_DRY=""
           if [ "${DRY_RUN_INPUT}" = "true" ]; then
-            echo "[deploy] NOTE: This was a dry run; no remote changes were applied."
+            RSYNC_DRY="--dry-run -v"
+            echo "[deploy] Dry run enabled: rsync will not modify remote (showing planned changes)."
+          fi
+          rsync -az $RSYNC_DRY -e "ssh -p $HOSTINGER_SSH_PORT" $DELETE_FLAG $EXCLUDE_ARGS ./ "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH" || { echo "[error] rsync failed"; exit 1; }
+          if [ "${DRY_RUN_INPUT}" = "true" ]; then
+            echo "[deploy] NOTE: Dry run completed; skipping marker & post-mutation steps."
           fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
@@ -378,7 +383,7 @@ jobs:
           DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
 
       - name: Optional - Run WP cache flush
-        if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' && github.event.inputs.audit != 'true' }}
+        if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cd $HOSTINGER_PATH && wp cache flush || true"
         env:
@@ -389,7 +394,7 @@ jobs:
           RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
 
       - name: Record deployment marker
-        if: ${{ success() && github.event.inputs.audit != 'true' }}
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
           echo "[deploy] Writing .deploy-info.json marker with commit $GITHUB_SHA" 
           if [ -z "$HOSTINGER_PATH" ]; then
