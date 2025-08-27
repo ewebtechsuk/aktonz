@@ -515,7 +515,7 @@ jobs:
           fi
           HOSTINGER_PATH="$CLEAN_PATH"
           RSYNC_EXCLUDES=(
-          ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/litespeed" "wp-content/uploads" "wp-content/upgrade" ".DS_Store" "**/.DS_Store"
+          ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade" ".DS_Store" "**/.DS_Store"
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
             "aktonz-local-copy" # local backup snapshot, never deploy
           )
@@ -650,6 +650,7 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+
       - name: Extract previous marker metrics (hashes & sizes)
         if: ${{ (success() || failure()) && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
@@ -706,26 +707,7 @@ jobs:
           RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
 
 
-      - name: Upload deployment marker
-        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: deploy-marker
-          path: .deploy-info.json.local
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 14
-
-      - name: Verify marker artifact presence
-        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
-        run: |
-          if [ -f .deploy-info.json.local ]; then
-            echo "[marker-check] Local marker present: $(wc -c < .deploy-info.json.local) bytes"
-            head -c 180 .deploy-info.json.local | sed 's/^/[marker-check][head]/'
-          else
-            echo "[marker-check][warn] .deploy-info.json.local missing after upload attempt; creating placeholder to avoid downstream confusion"
-            echo '{}' > .deploy-info.json.local
-          fi
+  # Removed premature marker artifact upload; marker is only created after smoke tests now.
 
       - name: Toggle WP_DEBUG (optional)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.toggle_debug != 'none' && github.event.inputs.toggle_debug != '' }}
@@ -968,6 +950,16 @@ jobs:
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Upload deployment marker artifact (post-creation)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-marker
+          path: .deploy-info.json.local
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Post-run validation & integrity assertions
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
