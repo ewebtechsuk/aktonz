@@ -229,6 +229,113 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Guard & (if needed) recover wp-config before sanitation
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        id: cfg_guard
+        run: |
+          set -e
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
+            PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
+          CFG=""
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then
+            CFG="$ROOT_CFG"
+          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then
+            CFG="$PARENT_CFG"
+          else
+            SEARCH_BASE="$(dirname "$HOSTINGER_PATH")"
+            CFG=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find '$SEARCH_BASE' -maxdepth 4 -type f -name wp-config.php 2>/dev/null | head -n1" || true)
+          fi
+          if [ -z "$CFG" ]; then
+            echo "[cfg-guard] No wp-config.php found; skipping guard (cannot enforce)";
+            exit 0
+          fi
+          echo "[cfg-guard] Target config: $CFG"
+          MIN_LINES=${MIN_CONFIG_LINES:-50}
+          REQUIRED_TOKENS=(DB_NAME DB_USER AUTH_KEY table_prefix)
+          LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG' 2>/dev/null" || echo 0)
+          SIZE=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "stat -c %s '$CFG' 2>/dev/null" || echo 0)
+          MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG' 2>/dev/null | awk '{print $1}'" || echo unknown)
+          echo "[cfg-guard] Current metrics: lines=$LINES size=$SIZE md5=$MD5"
+          MISSING=()
+          for t in "${REQUIRED_TOKENS[@]}"; do
+            if ! ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -q '$t' '$CFG'"; then
+              MISSING+=("$t")
+            fi
+          done
+          if [ ${#MISSING[@]} -eq 0 ]; then
+            echo "[cfg-guard] Required tokens present."
+          else
+            echo "[cfg-guard][warn] Missing tokens: ${MISSING[*]}"
+          fi
+          RECOVERED=false
+          RECOVER_SRC=""
+          if { [ "$LINES" -lt "$MIN_LINES" ] || [ ${#MISSING[@]} -gt 0 ]; }; then
+            echo "[cfg-guard][warn] Config below thresholds (lines<$MIN_LINES or missing tokens); attempting recovery from backups"
+            CANDIDATES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1t '$CFG.ci.bak.'* 2>/dev/null || true")
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$CFG.bak' ]"; then
+              CANDIDATES="$CANDIDATES $CFG.bak"
+            fi
+            if [ -z "$CANDIDATES" ]; then
+              echo "[cfg-guard][error] No backups available for recovery"; EXIT_FAIL=1
+            else
+              for cand in $CANDIDATES; do
+                [ -z "$cand" ] && continue
+                CL=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$cand' 2>/dev/null" || echo 0)
+                if [ "$CL" -lt "$MIN_LINES" ]; then echo "[cfg-guard][skip] $cand lines=$CL (<$MIN_LINES)"; continue; fi
+                TOK_MISS=false
+                for t in "${REQUIRED_TOKENS[@]}"; do
+                  if ! ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -q '$t' '$cand'"; then TOK_MISS=true; break; fi
+                done
+                if [ "$TOK_MISS" = true ]; then echo "[cfg-guard][skip] $cand missing required tokens"; continue; fi
+                echo "[cfg-guard][recovery] Restoring from $cand"
+                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cp '$cand' '$CFG'" || { echo "[cfg-guard][error] Restore failed from $cand"; continue; }
+                RECOVERED=true; RECOVER_SRC="$cand"; break
+              done
+              if [ "$RECOVERED" = false ]; then
+                echo "[cfg-guard][error] No suitable backup met thresholds"; EXIT_FAIL=1
+              else
+                LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG' 2>/dev/null" || echo 0)
+                SIZE=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "stat -c %s '$CFG' 2>/dev/null" || echo 0)
+                MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG' 2>/dev/null | awk '{print $1}'" || echo unknown)
+                echo "[cfg-guard][recovery] New metrics: lines=$LINES size=$SIZE md5=$MD5"
+              fi
+            fi
+          fi
+          TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          MJSON_ITEMS=""
+          for m in "${MISSING[@]}"; do
+            [ -z "$m" ] && continue
+            if [ -z "$MJSON_ITEMS" ]; then MJSON_ITEMS="\"$m\""; else MJSON_ITEMS="$MJSON_ITEMS,\"$m\""; fi
+          done
+          [ -z "$MJSON_ITEMS" ] && MJSON='[]' || MJSON="[$MJSON_ITEMS]"
+          printf '{"path":"%s","lines":%s,"size":%s,"md5":"%s","recovered":%s,"recovered_from":"%s","missing_tokens":%s,"min_lines_threshold":%s,"timestamp":"%s"}\n' \
+            "$CFG" "$LINES" "$SIZE" "$MD5" "$RECOVERED" "$RECOVER_SRC" "$MJSON" "$MIN_LINES" "$TS" > wp-config-metrics.json
+          echo "[cfg-guard] Metrics JSON written: $(wc -c < wp-config-metrics.json) bytes"
+          echo "CFG_LINES=$LINES" >> $GITHUB_ENV
+          echo "CFG_RECOVERED=$RECOVERED" >> $GITHUB_ENV
+          echo "CFG_RECOVER_SRC=$RECOVER_SRC" >> $GITHUB_ENV
+          if [ "${EXIT_FAIL:-0}" = 1 ]; then
+            echo "[cfg-guard][fatal] Guard conditions failed and no recovery succeeded. Failing job to prevent further damage." >&2
+            exit 1
+          fi
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          MIN_CONFIG_LINES: ${{ secrets.MIN_CONFIG_LINES }}
+
+      - name: Upload wp-config guard metrics
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-config-metrics
+          path: wp-config-metrics.json
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Neutralize cache drop-ins if LiteSpeed disabled
         if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
@@ -328,7 +435,7 @@ jobs:
           fi
           HOSTINGER_PATH="$CLEAN_PATH"
           RSYNC_EXCLUDES=(
-            ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/litespeed" "wp-content/uploads" "wp-content/upgrade"
+          ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/litespeed" "wp-content/uploads" "wp-content/upgrade" ".DS_Store" "**/.DS_Store"
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
             "aktonz-local-copy" # local backup snapshot, never deploy
           )
