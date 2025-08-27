@@ -154,7 +154,25 @@ jobs:
           done
           for cand in php-error.log debug.log error_log; do
             if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$cand' ]"; then
-              echo "[audit-pre] Tail of wp-content/$cand:"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break; fi
+              MAX_H=${LOG_MAX_AGE_HOURS:-6}
+              LAST_LINE=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$cand'" | grep -E "\\[[0-9]{2}-[A-Za-z]{3}-[0-9]{4} " | tail -n1 || true)
+              if [ -n "$LAST_LINE" ]; then
+                TS_RAW=$(printf '%s' "$LAST_LINE" | sed -E 's/.*\\[([0-9]{2}-[A-Za-z]{3}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}).*/\\1/')
+                if EPOCH=$(date -u -d "$TS_RAW UTC" +%s 2>/dev/null); then
+                  NOW=$(date -u +%s)
+                  AGE=$(( (NOW - EPOCH) / 3600 ))
+                  if [ $AGE -le $MAX_H ]; then
+                    echo "[audit-pre] Tail of wp-content/$cand (last entry ${AGE}h old <= ${MAX_H}h):"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break
+                  else
+                    echo "[audit-pre] Skipping $cand (last entry ${AGE}h old > ${MAX_H}h)";
+                  fi
+                else
+                  echo "[audit-pre] Unparseable timestamp in $cand; showing tail"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break
+                fi
+              else
+                echo "[audit-pre] No timestamped lines in $cand; showing tail"; ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 40 '$HOSTINGER_PATH/wp-content/$cand'" | sed 's/^/[log]/'; break
+              fi
+            fi
           done
           echo "[audit-pre] Missing count: $MISS"
           echo "missing_count=$MISS" >> $GITHUB_OUTPUT
@@ -252,7 +270,8 @@ jobs:
             exit 0
           fi
           echo "[cfg-guard] Target config: $CFG"
-          MIN_LINES=${MIN_CONFIG_LINES:-50}
+          # Raised fallback threshold reflecting stable baseline (~110 lines observed)
+          MIN_LINES=${MIN_CONFIG_LINES:-95}
           REQUIRED_TOKENS=(DB_NAME DB_USER AUTH_KEY table_prefix)
           LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG' 2>/dev/null" || echo 0)
           SIZE=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "stat -c %s '$CFG' 2>/dev/null" || echo 0)
@@ -481,6 +500,18 @@ jobs:
           if [ "${DRY_RUN_INPUT}" = "true" ]; then
             echo "[deploy] NOTE: Dry run completed; skipping marker & post-mutation steps."
           fi
+          if [ "${DRY_RUN_INPUT}" != "true" ]; then
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/.deploy-info.json' ]"; then
+              PREV_COMMIT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -o '\"commit\":\"[0-9a-f]\{40\}\"' '$HOSTINGER_PATH/.deploy-info.json' | head -n1 | cut -d'\"' -f4 || true")
+              if [ -n "$PREV_COMMIT" ] && [ "$PREV_COMMIT" != "$GITHUB_SHA" ]; then
+                echo "[deploy][drift] Previous marker commit $PREV_COMMIT differs from current $GITHUB_SHA";
+              else
+                echo "[deploy][drift] Previous marker commit matches current (or not found)";
+              fi
+            else
+              echo "[deploy][drift] No prior remote marker present."
+            fi
+          fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
@@ -563,6 +594,7 @@ jobs:
             || { echo '[error] Failed to stream marker to remote'; exit 1; }
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 400 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
           echo "MARKER_SHA256=$HASH" >> $GITHUB_ENV
+          echo "[deploy] Exported MARKER_SHA256 env=$HASH"
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
@@ -799,10 +831,20 @@ jobs:
             echo "[validate][info] No prior MARKER_SHA256 baseline available for comparison"
           fi
           echo "[validate] Marker structure OK"
+          if command -v jq >/dev/null 2>&1; then
+            if ! jq -e '.commit and .short_sha and .branch and .deployed_at and .cfg_lines and (.disabled_plugins|type=="array") and .disabled_plugins_count and .litespeed_disabled_variants' "$MARKER_LOCAL" >/dev/null; then
+              echo "[validate][fatal] Marker JSON schema validation failed (jq)"; exit 1; fi
+          else
+            echo "[validate][info] jq not installed; skipping marker schema validation"
+          fi
           # Build validation JSON summary
           printf '{"original_lines":%s,"final_lines":%s,"wp_cache_defines":%s,"final_md5":"%s","marker_size":%s,"marker_hash":"%s","timestamp":"%s"}\n' \
             "$ORIG_LINES" "$FINAL_LINES" "$WP_CACHE_COUNT" "$FINAL_MD5" "$(wc -c < "$MARKER_LOCAL" 2>/dev/null || echo 0)" "$CURRENT_HASH" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > validation-summary.json
           echo "[validate] Wrote validation-summary.json ($(wc -c < validation-summary.json) bytes)"
+          if command -v jq >/dev/null 2>&1; then
+            if ! jq -e '.original_lines and .final_lines and .wp_cache_defines and .final_md5 and .marker_size and .marker_hash and .timestamp' validation-summary.json >/dev/null; then
+              echo "[validate][fatal] validation-summary.json schema invalid (jq)"; exit 1; fi
+          fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
