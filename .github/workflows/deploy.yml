@@ -644,6 +644,35 @@ jobs:
           scp -P "$HOSTINGER_SSH_PORT" "$TMPFILE" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$ASSET_DIR/README.ci.txt" 2>/dev/null || true
           rm -f "$TMPFILE" || true
           echo "[litespeed-post] Stubbed asset directory ensured."
+
+          # Create a benign stub litespeed-cache plugin directory if the real plugin is absent, to satisfy any hard-coded includes.
+          # This prevents server-level tooling from auto-restoring or attempting to load missing original code paths and throwing fatals.
+          STUB_MAIN="$PLUG_DIR/litespeed-cache.php"
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ ! -d '$PLUG_DIR' ]"; then
+            echo "[litespeed-post][stub] Creating benign litespeed-cache stub plugin (real plugin disabled)."
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p '$PLUG_DIR'" || true
+            # Build stub locally then copy to remote for clarity (avoids heredoc PHP tag confusing YAML linters)
+            {
+              printf '%s\n' '<?php'
+              printf '%s\n' '/*'
+              printf '%s\n' 'Plugin Name: LiteSpeed Cache (CI Stub)'
+              printf '%s\n' 'Description: Placeholder stub created by CI to neutralize real LiteSpeed plugin during troubleshooting. Safe to remove once issue resolved.'
+              printf '%s\n' 'Version: 0.0.0-ci-stub'
+              printf '%s\n' 'Author: CI Automation'
+              printf '%s\n' '*/'
+              printf '%s\n' "if ( ! defined('LITESPEED_DISABLE_ALL') ) define('LITESPEED_DISABLE_ALL', true);"
+              printf '%s\n' "if ( ! defined('LSCACHE_ADV_CACHE') ) define('LSCACHE_ADV_CACHE', false);"
+              printf '%s\n' '// Short-circuit early to avoid loading any real code.'
+              printf '%s\n' 'return; // CI stub ends execution.'
+            } > stub-lscache.php
+            scp -P "$HOSTINGER_SSH_PORT" stub-lscache.php "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$STUB_MAIN" 2>/dev/null || echo "[litespeed-post][stub][warn] Failed to upload stub main file"
+            rm -f stub-lscache.php || true
+            # Marker file for diagnostics
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo 'ci-stub-created $(date -u +%Y-%m-%dT%H:%M:%SZ)' > '$PLUG_DIR/.ci-litespeed-stub'" || true
+          else
+            # If directory exists after our earlier rename attempt, record its contents for debugging.
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-post][dir] /'" || true
+          fi
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
