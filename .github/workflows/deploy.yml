@@ -50,11 +50,13 @@ jobs:
         run: |
           if command -v jq >/dev/null 2>&1; then
             echo "[setup] jq already present ($(jq --version))";
+            echo "JQ_VERSION=$(jq --version)" >> $GITHUB_ENV
           else
             echo "[setup] Installing jq";
             sudo apt-get update -y >/dev/null 2>&1 || sudo apt-get update -y;
             sudo apt-get install -y jq >/dev/null 2>&1 || sudo apt-get install -y jq;
             command -v jq >/dev/null 2>&1 && echo "[setup] jq install complete ($(jq --version))" || { echo "[setup][fatal] jq install failed"; exit 1; }
+            echo "JQ_VERSION=$(jq --version)" >> $GITHUB_ENV
           fi
 
       - name: Show manual trigger reason
@@ -517,11 +519,14 @@ jobs:
               PREV_COMMIT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -o '\"commit\":\"[0-9a-f]\{40\}\"' '$HOSTINGER_PATH/.deploy-info.json' | head -n1 | cut -d'\"' -f4 || true")
               if [ -n "$PREV_COMMIT" ] && [ "$PREV_COMMIT" != "$GITHUB_SHA" ]; then
                 echo "[deploy][drift] Previous marker commit $PREV_COMMIT differs from current $GITHUB_SHA";
+                echo "DRIFT_STATUS=differs" >> $GITHUB_ENV
               else
                 echo "[deploy][drift] Previous marker commit matches current (or not found)";
+                echo "DRIFT_STATUS=matches" >> $GITHUB_ENV
               fi
             else
-              echo "[deploy][drift] No prior remote marker present."
+              echo "[deploy][drift] No prior remote marker present.";
+              echo "DRIFT_STATUS=none" >> $GITHUB_ENV
             fi
           fi
         env:
@@ -883,3 +888,27 @@ jobs:
           path: validation-summary.json
           if-no-files-found: error
           retention-days: 7
+
+      - name: Final status summary
+        if: ${{ always() }}
+        run: |
+          echo "::group::Final Deployment Summary"
+          echo "summary.commit=$GITHUB_SHA"
+          if [ -n "${{ env.MARKER_SHA256 }}" ]; then echo "summary.marker_sha256=${{ env.MARKER_SHA256 }}"; fi
+          if [ -n "${{ env.DRIFT_STATUS }}" ]; then echo "summary.drift=${{ env.DRIFT_STATUS }}"; fi
+          if [ -n "${{ env.JQ_VERSION }}" ]; then echo "summary.jq=${{ env.JQ_VERSION }}"; fi
+          if [ -f validation-summary.json ]; then
+            if command -v jq >/dev/null 2>&1; then
+              jq -r '"summary.config_lines=" + (.original_lines|tostring) + "/" + (.final_lines|tostring) + " summary.marker_size=" + (.marker_size|tostring) + " summary.marker_hash_prefix=" + (.marker_hash[0:16])' validation-summary.json || true
+            else
+              ORIG=$(grep -o '"original_lines":[0-9]*' validation-summary.json | cut -d: -f2 | head -1); \
+              FIN=$(grep -o '"final_lines":[0-9]*' validation-summary.json | cut -d: -f2 | head -1); \
+              SIZE=$(grep -o '"marker_size":[0-9]*' validation-summary.json | cut -d: -f2 | head -1); \
+              HASH=$(grep -o '"marker_hash":"[a-f0-9]*"' validation-summary.json | cut -d: -f2 | tr -d '"' | cut -c1-16); \
+              echo "summary.config_lines=$ORIG/$FIN summary.marker_size=$SIZE summary.marker_hash_prefix=$HASH";
+            fi
+          else
+            echo "summary.validation=absent"
+          fi
+          if [ "${{ job.status }}" = 'success' ]; then echo "summary.status=success"; else echo "summary.status=${{ job.status }}"; fi
+          echo "::endgroup::"
