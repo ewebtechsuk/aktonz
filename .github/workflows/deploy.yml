@@ -284,6 +284,30 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Force disable problematic plugins (safety net)
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          # Intentionally force-disable litespeed-cache (root cause of 500 via md5_file on missing tmp assets)
+          FORCE_LIST="litespeed-cache"
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          for p in $FORCE_LIST; do
+            SRC="$HOSTINGER_PATH/wp-content/plugins/$p"
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$SRC' ]"; then
+              TS=$(date +%s)
+              DST="$SRC.disabled.$TS"
+              echo "[force-disable] Renaming active $p -> $(basename "$DST")"
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mv '$SRC' '$DST'" || echo "[force-disable][warn] Failed to rename $p (permissions?)"
+            else
+              echo "[force-disable] $p not present (already disabled or absent)"
+            fi
+          done
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Guard & (if needed) recover wp-config before sanitation
         if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         id: cfg_guard
@@ -596,19 +620,59 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
-      - name: Extract previous marker metrics (hashes & sizes)
+      - name: Post-rsync LiteSpeed purge & stub (prevent optimizer fatals)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
+          set -e
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          PLUG_DIR="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$PLUG_DIR' ]"; then
+            TS=$(date +%s)
+            echo "[litespeed-post] Active litespeed-cache directory found post-rsync; renaming to disabled variant (.disabled.$TS)"
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mv '$PLUG_DIR' '$PLUG_DIR.disabled.$TS'" || echo "[litespeed-post][warn] Rename failed"
+          else
+            echo "[litespeed-post] No active litespeed-cache directory (good)"
+          fi
+          ASSET_DIR="$HOSTINGER_PATH/wp-content/litespeed"
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p '$ASSET_DIR/css' '$ASSET_DIR/js' && chmod 755 '$ASSET_DIR' '$ASSET_DIR/css' '$ASSET_DIR/js'" || true
+          TMPFILE="lscache-readme.$$"
+          cat > "$TMPFILE" <<'EOF'
+          This directory is intentionally kept (empty) by CI to prevent LiteSpeed Cache optimizer fatals.
+          The plugin is disabled/renamed during deployment. Empty css/ and js/ subfolders satisfy any stray md5_file() probes.
+          EOF
+          scp -P "$HOSTINGER_SSH_PORT" "$TMPFILE" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$ASSET_DIR/README.ci.txt" 2>/dev/null || true
+          rm -f "$TMPFILE" || true
+          echo "[litespeed-post] Stubbed asset directory ensured."
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Extract previous marker metrics (hashes & sizes)
+        if: ${{ (success() || failure()) && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          # Allow tolerant parsing (do not fail whole job if marker JSON malformed)
+          set +e
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s '$HOSTINGER_PATH/.deploy-info.json'" 2>/dev/null; then
             CONTENT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat '$HOSTINGER_PATH/.deploy-info.json'" || true)
             echo "$CONTENT" | head -c 200 | sed 's/^/[prev-marker]/'
             if command -v jq >/dev/null 2>&1; then
-              HPREV_HASH=$(printf '%s' "$CONTENT" | jq -r '.homepage_hash // empty')
-              APREV_HASH=$(printf '%s' "$CONTENT" | jq -r '.admin_hash // empty')
-              HPREV_SIZE=$(printf '%s' "$CONTENT" | jq -r '.homepage_size // empty')
-              APREV_SIZE=$(printf '%s' "$CONTENT" | jq -r '.admin_size // empty')
+              HPREV_HASH=$(printf '%s' "$CONTENT" | jq -r '.homepage_hash // empty' 2>/dev/null)
+              JQ_RC=$?
+              APREV_HASH=$(printf '%s' "$CONTENT" | jq -r '.admin_hash // empty' 2>/dev/null)
+              HPREV_SIZE=$(printf '%s' "$CONTENT" | jq -r '.homepage_size // empty' 2>/dev/null)
+              APREV_SIZE=$(printf '%s' "$CONTENT" | jq -r '.admin_size // empty' 2>/dev/null)
+              if [ $JQ_RC -ne 0 ]; then
+                echo "[prev-marker][warn] jq parse failed (rc=$JQ_RC); falling back to regex extraction"
+                HPREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"homepage_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
+                APREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"admin_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
+                HPREV_SIZE=$(printf '%s' "$CONTENT" | grep -o '"homepage_size":[0-9]*' | head -n1 | cut -d: -f2 || true)
+                APREV_SIZE=$(printf '%s' "$CONTENT" | grep -o '"admin_size":[0-9]*' | head -n1 | cut -d: -f2 || true)
+              fi
             else
               HPREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"homepage_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
               APREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"admin_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
@@ -622,6 +686,8 @@ jobs:
           else
             echo "[prev-marker] No existing marker (first run or missing)."
           fi
+          # Re-enable errexit for any subsequent composite commands (defensive; though step ends here)
+          set -e
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
