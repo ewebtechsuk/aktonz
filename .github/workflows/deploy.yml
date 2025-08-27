@@ -158,7 +158,11 @@ jobs:
           done
           echo "[audit-pre] Missing count: $MISS"
           echo "missing_count=$MISS" >> $GITHUB_OUTPUT
-          [ "$MISS" -gt 0 ] && echo "[audit-pre] WARNING: $MISS required path(s) missing."
+          if [ "$MISS" -gt 0 ]; then
+            echo "[audit-pre] WARNING: $MISS required path(s) missing."
+          else
+            echo "[audit-pre] All required paths present."
+          fi
 
       - name: List remote plugins (debug)
         if: ${{ github.event.inputs.audit != 'true' }}
