@@ -46,6 +46,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Ensure jq installed
+        run: |
+          if command -v jq >/dev/null 2>&1; then
+            echo "[setup] jq already present ($(jq --version))";
+          else
+            echo "[setup] Installing jq";
+            sudo apt-get update -y >/dev/null 2>&1 || sudo apt-get update -y;
+            sudo apt-get install -y jq >/dev/null 2>&1 || sudo apt-get install -y jq;
+            command -v jq >/dev/null 2>&1 && echo "[setup] jq install complete ($(jq --version))" || { echo "[setup][fatal] jq install failed"; exit 1; }
+          fi
+
       - name: Show manual trigger reason
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.reason != '' }}
         run: |
@@ -594,6 +605,8 @@ jobs:
           printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
             || { echo '[error] Failed to stream marker to remote'; exit 1; }
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 400 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
+          # Retrieve full remote marker locally for artifact upload & historical diffing
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat \"$REMOTE_DIR/.deploy-info.json\"" > .deploy-info.json.local || echo '[marker][warn] Unable to download marker to local workspace'
           echo "MARKER_SHA256=$HASH" >> $GITHUB_ENV
           echo "[deploy] Exported MARKER_SHA256 env=$HASH"
         env:
@@ -601,6 +614,15 @@ jobs:
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Upload deployment marker
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-marker
+          path: .deploy-info.json.local
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Toggle WP_DEBUG (optional)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.toggle_debug != 'none' && github.event.inputs.toggle_debug != '' }}
