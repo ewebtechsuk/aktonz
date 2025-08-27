@@ -186,13 +186,12 @@ jobs:
           RETAIN_COUNT=${RETAIN_DISABLED_LITESPEED:-2}
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -c '
             set -e
-            echo [prune][debug] Remote shell: \"$SHELL\" Bash: $(bash --version 2>/dev/null | head -n1)
             PLUGDIR=\"$HOSTINGER_PATH/wp-content/plugins\"
             if [ ! -d \"$PLUGDIR\" ]; then echo [prune] Plugin dir missing: $PLUGDIR; exit 0; fi
             cd \"$PLUGDIR\" || exit 0
             LIST=$(find . -maxdepth 1 -mindepth 1 -type d -name 'litespeed-cache.disabled*' -printf '%T@ %P\n' 2>/dev/null | sort -rn || true)
             if [ -z \"$LIST\" ]; then echo [prune] Nothing to prune; ls -1 | sed 's/^/[prune][plugins]/'; exit 0; fi
-            COUNT=$(printf '%s\n' "$LIST" | grep -c . || true)
+            COUNT=$(printf '%s\n' "$LIST" | awk 'NF{c++} END{print c+0}')
             echo "[prune] Found $COUNT disabled copies (retain $RETAIN_COUNT)"
             NAMES=$(printf '%s\n' "$LIST" | awk '{print $2}')
             printf '%s\n' "$NAMES" | sed 's/^/[prune][all] /'
