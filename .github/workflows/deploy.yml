@@ -182,19 +182,28 @@ jobs:
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           echo "[prune] Checking for stale litespeed-cache.disabled.* directories"
-          # Retain newest N (default 2) disabled copies, remove older ones. Fix COUNT logic to correctly count lines.
+          # Retain newest N (default 2) disabled copies, remove older ones.
           RETAIN_COUNT=${RETAIN_DISABLED_LITESPEED:-2}
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -c '
             set -e
-            cd \"$HOSTINGER_PATH/wp-content/plugins\" 2>/dev/null || { echo [prune] Plugin dir missing; exit 0; };
-            LIST=$(ls -1dt litespeed-cache.disabled.* 2>/dev/null || true)
-            if [ -z \"$LIST\" ]; then echo [prune] Nothing to prune; exit 0; fi
-            COUNT=$(echo \"$LIST\" | wc -l | tr -d " ")
-            echo \"[prune] Found $COUNT disabled copies (retaining $RETAIN_COUNT)\"
+            PLUGDIR=\"$HOSTINGER_PATH/wp-content/plugins\"
+            if [ ! -d \"$PLUGDIR\" ]; then echo [prune] Plugin dir missing: $PLUGDIR; exit 0; fi
+            cd \"$PLUGDIR\" || exit 0
+            shopt -s nullglob dotglob
+            # Collect matches (exclude active litespeed-cache if ever restored) newest first via ls -dt (mtime)
+            MATCHES=(litespeed-cache.disabled litespeed-cache.disabled.*)
+            # Filter only existing dirs
+            EXISTING=()
+            for m in "${MATCHES[@]}"; do [ -d "$m" ] && EXISTING+=("$m"); done
+            if [ ${#EXISTING[@]} -eq 0 ]; then echo [prune] Nothing to prune; ls -1 | sed 's/^/[prune][plugins]/'; exit 0; fi
+            # Sort by mtime descending
+            SORTED=$(ls -1dt "${EXISTING[@]}" 2>/dev/null || true)
+            COUNT=$(printf '%s\n' "$SORTED" | grep -c . || true)
+            echo "[prune] Found $COUNT disabled copies (retain $RETAIN_COUNT)"
+            printf '%s\n' "$SORTED" | sed 's/^/[prune][all] /'
             if [ "$COUNT" -le "$RETAIN_COUNT" ]; then echo [prune] Nothing to prune \(count=$COUNT\); exit 0; fi
-            echo "$LIST" | sed 's/^/[prune][all] /'
-            # Skip first RETAIN_COUNT lines (newest) then delete the rest
-            echo "$LIST" | tail -n +$((RETAIN_COUNT + 1)) | while read d; do [ -n "$d" ] && echo [prune][del] "$d" && rm -rf -- "$d"; done
+            # Delete all but first RETAIN_COUNT lines
+            printf '%s\n' "$SORTED" | tail -n +$((RETAIN_COUNT + 1)) | while read d; do [ -n "$d" ] && echo [prune][del] "$d" && rm -rf -- "$d"; done
           '" || true
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
@@ -583,3 +592,17 @@ jobs:
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Homepage smoke test (always)
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
+        run: |
+          URL="${PRODUCTION_URL%/}/"
+          echo "[smoke] Curling homepage: $URL"
+          HTTP_CODE=$(curl -s -o body.html -w '%{http_code}' "$URL" || echo 000)
+          echo "[smoke] Status: $HTTP_CODE"
+            head -n 60 body.html | sed 's/^/[smoke][body]/'
+          if [ "$HTTP_CODE" -ge 500 ]; then echo "[smoke] FAIL: HTTP $HTTP_CODE"; exit 1; fi
+          if grep -qi 'critical error' body.html; then echo "[smoke] FAIL: Detected WordPress critical error banner"; exit 1; fi
+          echo "[smoke] PASS"
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
