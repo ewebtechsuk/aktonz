@@ -31,18 +31,17 @@ if ! command -v curl >/dev/null 2>&1; then
 fi
 mkdir -p "$ART_DIR" 2>/dev/null || true
 META_JSON="$ART_DIR/metrics.json"
-echo '{"checks":[]}' > "$META_JSON"
+# We'll build JSON progressively in-memory to avoid brittle sed insertions when values contain special chars.
+JSON_ENTRIES=""
 
 # Append JSON helper (very small, manual since jq not guaranteed)
 append_json() {
   # args: label code ms redirects size url_eff fail reason
   local label="$1" code="$2" ms="$3" redirects="$4" size="$5" url_eff="$6" fail="$7" reason="$8"
-  # naive insertion before final ]
   local entry
   entry=$(printf '{"label":"%s","code":%s,"time_ms":%s,"redirects":%s,"size":%s,"final_url":"%s","failed":%s,"reason":"%s"}' \
     "$label" "$code" "$ms" "$redirects" "$size" "$url_eff" "$fail" "$reason")
-  # shell json append (safe enough for controlled values without quotes in reason)
-  sed -i "s/\"checks\":\[/\"checks\":[$entry,/" "$META_JSON" || true
+  JSON_ENTRIES+=",$entry"
 }
 
 threshold_violation() {
@@ -166,6 +165,16 @@ run_check() {
 rc_home=0; rc_admin=0
 run_check "/" HOME || rc_home=$?
 run_check "/wp-admin/" ADMIN || rc_admin=$?
+
+# Emit final JSON metrics file
+{
+  printf '{"checks":['
+  if [ -n "$JSON_ENTRIES" ]; then
+    # trim leading comma
+    printf '%s' "${JSON_ENTRIES#,}"
+  fi
+  printf ']}'
+} > "$META_JSON"
 
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "HOMEPAGE_RC=$rc_home" >> "$GITHUB_ENV"
