@@ -50,6 +50,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate required secrets (fail-fast)
+        run: |
+          REQUIRED=(HOSTINGER_SSH_HOST HOSTINGER_SSH_USER HOSTINGER_SSH_PORT HOSTINGER_PATH HOSTINGER_SSH_KEY)
+          MISSING=()
+          for s in "${REQUIRED[@]}"; do
+            if [ -z "${!s:-}" ]; then MISSING+=("$s"); fi
+          done
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "[secrets][fatal] Missing required secrets: ${MISSING[*]}" >&2
+            exit 1
+          fi
+          echo "[secrets] All required base secrets present."
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+
       - name: Ensure jq installed
         run: |
           if command -v jq >/dev/null 2>&1; then
@@ -577,6 +596,38 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Extract previous marker metrics (hashes & sizes)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s '$HOSTINGER_PATH/.deploy-info.json'" 2>/dev/null; then
+            CONTENT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat '$HOSTINGER_PATH/.deploy-info.json'" || true)
+            echo "$CONTENT" | head -c 200 | sed 's/^/[prev-marker]/'
+            if command -v jq >/dev/null 2>&1; then
+              HPREV_HASH=$(printf '%s' "$CONTENT" | jq -r '.homepage_hash // empty')
+              APREV_HASH=$(printf '%s' "$CONTENT" | jq -r '.admin_hash // empty')
+              HPREV_SIZE=$(printf '%s' "$CONTENT" | jq -r '.homepage_size // empty')
+              APREV_SIZE=$(printf '%s' "$CONTENT" | jq -r '.admin_size // empty')
+            else
+              HPREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"homepage_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
+              APREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"admin_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
+              HPREV_SIZE=$(printf '%s' "$CONTENT" | grep -o '"homepage_size":[0-9]*' | head -n1 | cut -d: -f2 || true)
+              APREV_SIZE=$(printf '%s' "$CONTENT" | grep -o '"admin_size":[0-9]*' | head -n1 | cut -d: -f2 || true)
+            fi
+            [ -n "$HPREV_HASH" ] && echo "PREV_HOMEPAGE_HASH=$HPREV_HASH" >> $GITHUB_ENV
+            [ -n "$APREV_HASH" ] && echo "PREV_ADMIN_HASH=$APREV_HASH" >> $GITHUB_ENV
+            [ -n "$HPREV_SIZE" ] && echo "PREV_HOMEPAGE_SIZE=$HPREV_SIZE" >> $GITHUB_ENV
+            [ -n "$APREV_SIZE" ] && echo "PREV_ADMIN_SIZE=$APREV_SIZE" >> $GITHUB_ENV
+          else
+            echo "[prev-marker] No existing marker (first run or missing)."
+          fi
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Optional - Run WP cache flush
         if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
@@ -588,63 +639,6 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
 
-      - name: Record deployment marker
-        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
-        run: |
-          echo "[deploy] Writing enriched .deploy-info.json marker with commit $GITHUB_SHA" 
-          if [ -z "$HOSTINGER_PATH" ]; then echo "[error] HOSTINGER_PATH not set"; exit 1; fi
-          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
-          HOSTINGER_PATH="$CLEAN_PATH"
-          COMMIT="$GITHUB_SHA"
-          SHORT="${SHORT_SHA:-${GITHUB_SHA::7}}"
-          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          DISABLED_PLUGINS_JSON=${DISABLED_PLUGINS_JSON:-[]}
-          CFG_LINES_SAFE=${CFG_LINES:-0}
-          CFG_RECOVERED_SAFE=${CFG_RECOVERED:-false}
-          CFG_RECOVER_SRC_SAFE="${CFG_RECOVER_SRC:-}"
-          LSP_VARIANTS=${LITESPEED_DISABLED_VARIANTS:-0}
-          if [ -n "$CFG_RECOVER_SRC_SAFE" ]; then RECOVER_SRC_JSON="\"$CFG_RECOVER_SRC_SAFE\""; else RECOVER_SRC_JSON="null"; fi
-          DISABLED_COUNT=$(echo "$DISABLED_PLUGINS_JSON" | grep -o '"' | wc -l | awk '{print $1/2}')
-          JSON=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s}' \
-            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS")
-          REMOTE_DIR="${HOSTINGER_PATH%/}"
-          echo "[deploy] Marker JSON size: $(printf '%s' "$JSON" | wc -c) bytes"
-          HASH=$(printf '%s' "$JSON" | sha256sum | awk '{print $1}')
-          echo "[deploy] Marker sha256 $HASH"
-          printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
-            || { echo '[error] Failed to stream marker to remote'; exit 1; }
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 400 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
-          # Retrieve full remote marker locally for artifact upload & historical diffing (with retries + scp fallback)
-          RETR_OK=false
-          for attempt in 1 2 3; do
-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat \"$REMOTE_DIR/.deploy-info.json\" 2>/dev/null" > .deploy-info.json.local.tmp 2>/dev/null || true
-            if [ -s .deploy-info.json.local.tmp ]; then
-              mv .deploy-info.json.local.tmp .deploy-info.json.local
-              echo "[marker] Retrieved marker locally on attempt $attempt"
-              RETR_OK=true
-              break
-            else
-              echo "[marker][retry] Attempt $attempt failed to fetch marker; sleeping before retry"
-              rm -f .deploy-info.json.local.tmp 2>/dev/null || true
-              sleep 2
-            fi
-          done
-          if [ "$RETR_OK" = false ]; then
-            echo "[marker][warn] Direct SSH retrieval failed after retries; attempting scp fallback"
-            scp -P "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_DIR/.deploy-info.json" .deploy-info.json.local 2>/dev/null || true
-          fi
-          if [ -s .deploy-info.json.local ]; then
-            echo "[marker] Local marker copy size: $(wc -c < .deploy-info.json.local) bytes"
-          else
-            echo '[marker][warn] Local marker unavailable after retries & fallback (artifact step will warn)'
-          fi
-          echo "MARKER_SHA256=$HASH" >> $GITHUB_ENV
-          echo "[deploy] Exported MARKER_SHA256 env=$HASH"
-        env:
-          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
-          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
-          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Upload deployment marker
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
@@ -827,46 +821,87 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
-      - name: Homepage smoke test (always)
+      - name: Smoke tests (homepage + admin)
         if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
         run: |
-          URL="${PRODUCTION_URL%/}/"
-          echo "[smoke] Curling homepage: $URL"
-          # Capture status, total time, size, final URL, redirects (avoid heredoc for YAML safety)
-          CURL_METRICS=$(curl -s -o body.html -w '%{http_code} %{time_total} %{size_download} %{url_effective} %{num_redirects}' "$URL" || echo "000 0 0 - 0")
-          read -r HTTP_CODE TIME_TOTAL SIZE_DL URL_EFF N_REDIRECTS <<< "$CURL_METRICS"
-          TIME_MS=$(awk -v t="$TIME_TOTAL" 'BEGIN{printf "%.0f", t*1000}')
-          echo "[smoke] Status: $HTTP_CODE time=${TIME_MS}ms redirects=$N_REDIRECTS size=${SIZE_DL}B url=$URL_EFF"
-          head -n 60 body.html | sed 's/^/[smoke][body]/'
-          if [ "$HTTP_CODE" -ge 500 ]; then echo "[smoke] FAIL: HTTP $HTTP_CODE"; exit 1; fi
-          if grep -qi 'critical error' body.html; then echo "[smoke] FAIL: Detected WordPress critical error banner"; exit 1; fi
-          echo "HOMEPAGE_STATUS=$HTTP_CODE" >> $GITHUB_ENV
-          echo "HOMEPAGE_TIME_MS=$TIME_MS" >> $GITHUB_ENV
-          echo "HOMEPAGE_REDIRECTS=$N_REDIRECTS" >> $GITHUB_ENV
-          echo "[smoke] PASS"
+          chmod +x scripts/smoke_check.sh || true
+          scripts/smoke_check.sh "$PRODUCTION_URL"
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          SMOKE_ALLOW_FAILURE: ${{ secrets.SMOKE_ALLOW_FAILURE || 'false' }}
+          SMOKE_NONBLOCKING: ${{ secrets.SMOKE_NONBLOCKING || 'false' }}
+          SMOKE_MAX_HOME_MS: ${{ secrets.SMOKE_MAX_HOME_MS }}
+          SMOKE_MAX_ADMIN_MS: ${{ secrets.SMOKE_MAX_ADMIN_MS }}
+          SMOKE_MAX_REDIRECTS: ${{ secrets.SMOKE_MAX_REDIRECTS }}
+          SMOKE_MAX_SIZE_DELTA_PCT: ${{ secrets.SMOKE_MAX_SIZE_DELTA_PCT }}
+          PREV_HOMEPAGE_HASH: ${{ env.PREV_HOMEPAGE_HASH }}
+          PREV_ADMIN_HASH: ${{ env.PREV_ADMIN_HASH }}
+          PREV_HOMEPAGE_SIZE: ${{ env.PREV_HOMEPAGE_SIZE }}
+          PREV_ADMIN_SIZE: ${{ env.PREV_ADMIN_SIZE }}
 
-      - name: Admin smoke test
-        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
+      - name: Upload smoke artifacts
+        if: ${{ always() && env.PRODUCTION_URL != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-artifacts
+          path: |
+            smoke_artifacts
+          if-no-files-found: ignore
+          retention-days: 5
+
+      - name: Record deployment marker (post-smoke)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
-          BASE="${PRODUCTION_URL%/}"
-          ADMIN_URL="$BASE/wp-admin/"
-          echo "[smoke-admin] Curling: $ADMIN_URL"
-          # Follow redirects to capture final status/content
-          CURL_ADMIN=$(curl -s -L -o admin.html -w '%{http_code} %{time_total} %{size_download} %{url_effective} %{num_redirects}' "$ADMIN_URL" || echo "000 0 0 - 0")
-          read -r ADMIN_CODE ADMIN_TIME ADMIN_SIZE ADMIN_URL_EFF ADMIN_REDIRECTS <<< "$CURL_ADMIN"
-          ADMIN_TIME_MS=$(awk -v t="$ADMIN_TIME" 'BEGIN{printf "%.0f", t*1000}')
-          echo "[smoke-admin] HTTP $ADMIN_CODE time=${ADMIN_TIME_MS}ms redirects=$ADMIN_REDIRECTS size=${ADMIN_SIZE}B (expected 200 or redirect to login)"
-          head -n 40 admin.html | sed 's/^/[smoke-admin][body]/'
-          if [ "$ADMIN_CODE" -ge 500 ]; then echo "[smoke-admin] FAIL: $ADMIN_CODE"; exit 1; fi
-          if grep -qi 'critical error' admin.html; then echo "[smoke-admin] FAIL: Detected WordPress critical error banner"; exit 1; fi
-          echo "ADMIN_STATUS=$ADMIN_CODE" >> $GITHUB_ENV
-          echo "ADMIN_TIME_MS=$ADMIN_TIME_MS" >> $GITHUB_ENV
-          echo "ADMIN_REDIRECTS=$ADMIN_REDIRECTS" >> $GITHUB_ENV
-          echo "[smoke-admin] PASS"
+          echo "[deploy] Writing enriched .deploy-info.json marker with commit $GITHUB_SHA (includes smoke hashes)" 
+          if [ -z "$HOSTINGER_PATH" ]; then echo "[error] HOSTINGER_PATH not set"; exit 1; fi
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          COMMIT="$GITHUB_SHA"
+          SHORT="${SHORT_SHA:-${GITHUB_SHA::7}}"
+          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          DISABLED_PLUGINS_JSON=${DISABLED_PLUGINS_JSON:-[]}
+          CFG_LINES_SAFE=${CFG_LINES:-0}
+          CFG_RECOVERED_SAFE=${CFG_RECOVERED:-false}
+          CFG_RECOVER_SRC_SAFE="${CFG_RECOVER_SRC:-}"
+          LSP_VARIANTS=${LITESPEED_DISABLED_VARIANTS:-0}
+          HP_HASH=${HOMEPAGE_HASH:-}
+          AD_HASH=${ADMIN_HASH:-}
+          HP_SIZE=${HOMEPAGE_SIZE:-0}
+          AD_SIZE=${ADMIN_SIZE:-0}
+          if [ -n "$CFG_RECOVER_SRC_SAFE" ]; then RECOVER_SRC_JSON="\"$CFG_RECOVER_SRC_SAFE\""; else RECOVER_SRC_JSON="null"; fi
+          DISABLED_COUNT=$(echo "$DISABLED_PLUGINS_JSON" | grep -o '"' | wc -l | awk '{print $1/2}')
+          JSON_CORE=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s' \
+            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS")
+          if [ -n "$HP_HASH" ]; then JSON_CORE+=$(printf ',"homepage_hash":"%s","homepage_size":%s' "$HP_HASH" "$HP_SIZE"); fi
+          if [ -n "$AD_HASH" ]; then JSON_CORE+=$(printf ',"admin_hash":"%s","admin_size":%s' "$AD_HASH" "$AD_SIZE"); fi
+          JSON="$JSON_CORE}"
+          REMOTE_DIR="${HOSTINGER_PATH%/}"
+          echo "[deploy] Marker JSON size: $(printf '%s' "$JSON" | wc -c) bytes"
+          HASH=$(printf '%s' "$JSON" | sha256sum | awk '{print $1}')
+          echo "[deploy] Marker sha256 $HASH"
+          printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
+            || { echo '[error] Failed to stream marker to remote'; exit 1; }
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 300 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
+          RETR_OK=false
+          for attempt in 1 2 3; do
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat \"$REMOTE_DIR/.deploy-info.json\" 2>/dev/null" > .deploy-info.json.local.tmp 2>/dev/null || true
+            if [ -s .deploy-info.json.local.tmp ]; then
+              mv .deploy-info.json.local.tmp .deploy-info.json.local
+              echo "[marker] Retrieved marker locally on attempt $attempt"; RETR_OK=true; break
+            else
+              echo "[marker][retry] Attempt $attempt failed; sleeping"; rm -f .deploy-info.json.local.tmp 2>/dev/null || true; sleep 2
+            fi
+          done
+          if [ "$RETR_OK" = false ]; then
+            echo "[marker][warn] Fallback scp copy attempt"; scp -P "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_DIR/.deploy-info.json" .deploy-info.json.local 2>/dev/null || true; fi
+          if [ -s .deploy-info.json.local ]; then echo "[marker] Local marker copy size: $(wc -c < .deploy-info.json.local) bytes"; else echo '[marker][warn] Local copy unavailable'; fi
+          echo "MARKER_SHA256=$HASH" >> $GITHUB_ENV
+          echo "[deploy] Exported MARKER_SHA256 env=$HASH"
         env:
-          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Post-run validation & integrity assertions
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
@@ -954,6 +989,65 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: On-failure diagnostics (tail logs & deep probe)
+        if: ${{ failure() }}
+        run: |
+          echo "[diag] Job has failures; collecting diagnostics." >&2
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          MU_DIR="$HOSTINGER_PATH/wp-content/mu-plugins"
+          TEMP_MU="$MU_DIR/zzz-ci-temp-debug.php"
+          echo "[diag] Ensuring mu-plugins directory for temporary debug snippet" >&2
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p '$MU_DIR'" || true
+          echo "[diag] Injecting temporary mu-plugin to force WP_DEBUG & WP_DEBUG_LOG (if possible)" >&2
+          echo "[diag] Building temporary mu-plugin file locally" >&2
+          {
+            printf '%s\n' '<?php'
+            printf '%s\n' '/**'
+            printf '%s\n' ' * Temporary CI debug mu-plugin (auto-created on failure, removed after diagnostics).'
+            printf '%s\n' ' */'
+            printf '%s\n' "if (!defined('WP_DEBUG')) { define('WP_DEBUG', true); }"
+            printf '%s\n' "if (!defined('WP_DEBUG_LOG')) { define('WP_DEBUG_LOG', true); }"
+            printf '%s\n' "if (!defined('WP_DEBUG_DISPLAY')) { define('WP_DEBUG_DISPLAY', false); }"
+            printf '%s\n' "if (!function_exists('__ci_temp_debug_marker')) {"
+            printf '%s\n' '  function __ci_temp_debug_marker() { return true; }'
+            printf '%s\n' "  error_log('[ci-temp-debug] mu-plugin loaded at ' . date('c'));"
+            printf '%s\n' '}'
+          } > ci-temp-mu.php
+          scp -P "$HOSTINGER_SSH_PORT" ci-temp-mu.php "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$TEMP_MU" 2>/dev/null || echo "[diag][warn] Failed to copy mu-plugin" >&2
+          rm -f ci-temp-mu.php || true
+          # Small delay to allow PHP opcode cache (if any) to notice new file
+          sleep 2
+          echo "[diag] Probing endpoints" >&2
+          for ep in "/" "/wp-admin/" "/wp-json/" "/?rest_route=/"; do
+            URL="${PRODUCTION_URL%/}$ep"
+            echo "[diag] Curling $URL" >&2
+            curl -s -S -D diag_headers$(echo "$ep" | tr '/?' '_').txt -o diag_body$(echo "$ep" | tr '/?' '_').html -w '\n[diag] http_code=%{http_code} time_total=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n' "$URL" || echo "[diag][warn] curl failed for $ep" >&2
+            head -n 80 diag_body$(echo "$ep" | tr '/?' '_').html | sed "s/^/[diag][body$(echo "$ep" | tr '/?' '_')]/" || true
+          done
+          echo "[diag] Tailing logs" >&2
+          for logf in debug.log php-error.log error_log; do
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$logf' ]"; then
+              echo "[diag] Tail of $logf" >&2
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$logf'" | sed "s/^/[diag][log:$logf]/"
+            fi
+          done
+          echo "[diag] Grepping fatal patterns" >&2
+          for logf in debug.log php-error.log error_log; do
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$logf' ]"; then
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 300 '$HOSTINGER_PATH/wp-content/$logf'" | grep -Ei 'fatal|error' | head -n 60 | sed "s/^/[diag][grep:$logf]/" || true
+            fi
+          done
+          echo "[diag] Removing temporary mu-plugin" >&2
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "rm -f '$TEMP_MU'" || true
+          echo "[diag] Done diagnostics." >&2
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Final status summary
         if: ${{ always() }}
         run: |
@@ -968,6 +1062,17 @@ jobs:
           if [ -n "${{ env.ADMIN_STATUS }}" ]; then echo "summary.admin.status=${{ env.ADMIN_STATUS }}"; fi
           if [ -n "${{ env.ADMIN_TIME_MS }}" ]; then echo "summary.admin.time_ms=${{ env.ADMIN_TIME_MS }}"; fi
           if [ -n "${{ env.ADMIN_REDIRECTS }}" ]; then echo "summary.admin.redirects=${{ env.ADMIN_REDIRECTS }}"; fi
+          if [ -n "${{ env.HOMEPAGE_THRESHOLD_FAIL }}" ]; then echo "summary.home.threshold_fail=${{ env.HOMEPAGE_THRESHOLD_FAIL }}"; fi
+          if [ -n "${{ env.ADMIN_THRESHOLD_FAIL }}" ]; then echo "summary.admin.threshold_fail=${{ env.ADMIN_THRESHOLD_FAIL }}"; fi
+          if [ -n "${{ env.HOMEPAGE_HASH }}" ]; then echo "summary.home.hash_prefix=${{ env.HOMEPAGE_HASH }}" | cut -c1-16; fi
+          if [ -n "${{ env.ADMIN_HASH }}" ]; then echo "summary.admin.hash_prefix=${{ env.ADMIN_HASH }}" | cut -c1-16; fi
+          if [ -n "${{ env.HOMEPAGE_SIZE }}" ]; then echo "summary.home.size=${{ env.HOMEPAGE_SIZE }}"; fi
+          if [ -n "${{ env.ADMIN_SIZE }}" ]; then echo "summary.admin.size=${{ env.ADMIN_SIZE }}"; fi
+          if [ -n "${{ env.HOMEPAGE_SIZE_DELTA_PCT }}" ]; then echo "summary.home.size_delta_pct=${{ env.HOMEPAGE_SIZE_DELTA_PCT }}"; fi
+          if [ -n "${{ env.ADMIN_SIZE_DELTA_PCT }}" ]; then echo "summary.admin.size_delta_pct=${{ env.ADMIN_SIZE_DELTA_PCT }}"; fi
+          if [ -n "${{ env.HOMEPAGE_REASON }}" ]; then echo "summary.home.reason=${{ env.HOMEPAGE_REASON }}"; fi
+          if [ -n "${{ env.ADMIN_REASON }}" ]; then echo "summary.admin.reason=${{ env.ADMIN_REASON }}"; fi
+          if [ -n "${{ env.SMOKE_OVERALL_STATUS }}" ]; then echo "summary.smoke.overall=${{ env.SMOKE_OVERALL_STATUS }}"; fi
           if [ -f validation-summary.json ]; then
             if command -v jq >/dev/null 2>&1; then
               jq -r '"summary.config_lines=" + (.original_lines|tostring) + "/" + (.final_lines|tostring) + " summary.marker_size=" + (.marker_size|tostring) + " summary.marker_hash_prefix=" + (.marker_hash[0:16])' validation-summary.json || true
