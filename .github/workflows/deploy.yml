@@ -184,20 +184,7 @@ jobs:
           echo "[prune] Checking for stale litespeed-cache.disabled.* directories"
           # Retain newest N (default 2) disabled copies, remove older ones.
           RETAIN_COUNT=${RETAIN_DISABLED_LITESPEED:-2}
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "bash -c '
-            set -e
-            PLUGDIR=\"$HOSTINGER_PATH/wp-content/plugins\"
-            if [ ! -d \"$PLUGDIR\" ]; then echo [prune] Plugin dir missing: $PLUGDIR; exit 0; fi
-            cd \"$PLUGDIR\" || exit 0
-            LIST=$(find . -maxdepth 1 -mindepth 1 -type d -name 'litespeed-cache.disabled*' -printf '%T@ %P\n' 2>/dev/null | sort -rn || true)
-            if [ -z \"$LIST\" ]; then echo [prune] Nothing to prune; ls -1 | sed 's/^/[prune][plugins]/'; exit 0; fi
-            COUNT=$(printf '%s\n' "$LIST" | awk 'NF{c++} END{print c+0}')
-            echo "[prune] Found $COUNT disabled copies (retain $RETAIN_COUNT)"
-            NAMES=$(printf '%s\n' "$LIST" | awk '{print $2}')
-            printf '%s\n' "$NAMES" | sed 's/^/[prune][all] /'
-            if [ "$COUNT" -le "$RETAIN_COUNT" ]; then echo [prune] Nothing to prune \(count=$COUNT\); exit 0; fi
-            printf '%s\n' "$NAMES" | awk -v k="$RETAIN_COUNT" 'NR>k' | while read d; do [ -n "$d" ] && echo [prune][del] "$d" && rm -rf -- "$d"; done
-          '" || true
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "P='$HOSTINGER_PATH'; R='$RETAIN_COUNT'; CD=\"\$P/wp-content/plugins\"; if [ ! -d \"\$CD\" ]; then echo '[prune] Plugin dir missing:' \"\$CD\"; exit 0; fi; cd \"\$CD\" || exit 0; LS=\"\$(ls -1dt litespeed-cache.disabled* 2>/dev/null || true)\"; if [ -z \"\$LS\" ]; then echo '[prune] Nothing to prune'; exit 0; fi; CNT=\"\$(printf '%s\n' \"\$LS\" | wc -l | tr -d ' ')\"; echo \"[prune] Found \$CNT disabled copies retain \$R\"; printf '%s\n' \"\$LS\" | nl -ba | sed 's/^/[prune][all] /'; if [ \"\$CNT\" -le \"\$R\" ]; then echo \"[prune] Nothing to prune (count=\$CNT retain=\$R)\"; exit 0; fi; printf '%s\n' \"\$LS\" | tail -n +$((RETAIN_COUNT + 1)) | while read d; do [ -n \"\$d\" ] && echo \"[prune][del] \$d\" && rm -rf -- \"\$d\"; done" || true
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
