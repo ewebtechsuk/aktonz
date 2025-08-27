@@ -740,3 +740,67 @@ jobs:
           echo "[smoke] PASS"
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+
+      - name: Post-run validation & integrity assertions
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set -e
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
+          # Collect final config metrics
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then
+            FINAL_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$ROOT_CFG' 2>/dev/null" || echo 0)
+            FINAL_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$ROOT_CFG' 2>/dev/null | awk '{print $1}'" || echo unknown)
+            echo "[validate] wp-config.php final lines=$FINAL_LINES md5=$FINAL_MD5"
+          else
+            echo "[validate][fatal] wp-config.php no longer present after deploy"; exit 1
+          fi
+          # Assert WP_CACHE uniqueness and forced false
+          WP_CACHE_COUNT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -i 'WP_CACHE' '$ROOT_CFG' 2>/dev/null | grep -c 'define' || true")
+          echo "[validate] WP_CACHE define count: $WP_CACHE_COUNT"
+          if [ "$WP_CACHE_COUNT" -ne 1 ]; then
+            echo "[validate][fatal] Expected exactly 1 WP_CACHE define, found $WP_CACHE_COUNT"; exit 1; fi
+          if ! ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -qi 'define.*WP_CACHE.*false' '$ROOT_CFG'"; then
+            echo "[validate][fatal] Single WP_CACHE define does not force false"; exit 1; fi
+          echo "[validate] WP_CACHE uniqueness and value OK"
+          # Compare line delta vs guard snapshot (CFG_LINES env from earlier guard step)
+          ORIG_LINES=${CFG_LINES:-0}
+          if [ "$ORIG_LINES" -gt 0 ]; then
+            DELTA=$((ORIG_LINES - FINAL_LINES))
+            ABS_DELTA=${DELTA#-}
+            echo "[validate] Config line delta original=$ORIG_LINES final=$FINAL_LINES (abs=$ABS_DELTA)"
+            if [ "$FINAL_LINES" -lt 30 ]; then echo "[validate][fatal] Final config unexpectedly small (<30 lines)"; exit 1; fi
+            if [ "$ABS_DELTA" -gt 30 ]; then echo "[validate][warn] Large line count delta ($ABS_DELTA) between guard and final; review changes"; fi
+          else
+            echo "[validate][info] No original CFG_LINES baseline available (guard may have skipped)."
+          fi
+          # Fetch marker JSON and perform minimal structural checks
+          MARKER_LOCAL=.deploy-info.json.final
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat '$HOSTINGER_PATH/.deploy-info.json' 2>/dev/null" > "$MARKER_LOCAL" || { echo "[validate][fatal] Unable to read remote marker"; exit 1; }
+          head -c 400 "$MARKER_LOCAL" | sed 's/^/[validate][marker]/'
+          for key in commit deployed_at cfg_lines disabled_plugins litespeed_disabled_variants; do
+            if ! grep -q "$key" "$MARKER_LOCAL"; then echo "[validate][fatal] Marker missing key: $key"; exit 1; fi
+          done
+          # Basic JSON validity (counts braces & quotes balance heuristic)
+          if [ $(grep -o '{' "$MARKER_LOCAL" | wc -l) -lt 1 ] || [ $(grep -o '}' "$MARKER_LOCAL" | wc -l) -lt 1 ]; then
+            echo "[validate][fatal] Marker appears malformed"; exit 1; fi
+          echo "[validate] Marker structure OK"
+          # Build validation JSON summary
+          printf '{"original_lines":%s,"final_lines":%s,"wp_cache_defines":%s,"final_md5":"%s","marker_size":%s,"timestamp":"%s"}\n' \
+            "$ORIG_LINES" "$FINAL_LINES" "$WP_CACHE_COUNT" "$FINAL_MD5" "$(wc -c < "$MARKER_LOCAL" 2>/dev/null || echo 0)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > validation-summary.json
+          echo "[validate] Wrote validation-summary.json ($(wc -c < validation-summary.json) bytes)"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Upload validation summary
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-run-validation
+          path: validation-summary.json
+          if-no-files-found: error
+          retention-days: 7
