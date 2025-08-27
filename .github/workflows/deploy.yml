@@ -184,7 +184,7 @@ jobs:
           # Retain newest N (default 2) disabled copies, remove older ones.
           RETAIN_COUNT=${RETAIN_DISABLED_LITESPEED:-2}
           # Remote script: escape all $ for remote evaluation (except injected HOSTINGER_PATH / RETAIN_COUNT)
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "P='$HOSTINGER_PATH'; R='$RETAIN_COUNT'; CD=\"\$P/wp-content/plugins\"; if [ ! -d \"\$CD\" ]; then echo '[prune] Plugin dir missing:' \"\$CD\"; exit 0; fi; cd \"\$CD\" || exit 0; BASE='litespeed-cache.disabled'; if [ -d \"\$BASE\" ]; then KEEP_BASE=1; else KEEP_BASE=0; fi; TS_LIST=\"\$(ls -1dt litespeed-cache.disabled.[0-9]* 2>/dev/null || true)\"; if [ -z \"\$TS_LIST\" ] && [ \$KEEP_BASE -eq 0 ]; then echo '[prune] Nothing to prune'; exit 0; fi; CNT_TS=\"\$(printf '%s\n' \"\$TS_LIST\" | grep -c . || true)\"; TOTAL=\$CNT_TS; if [ \$KEEP_BASE -eq 1 ]; then TOTAL=\$((TOTAL+1)); fi; echo \"[prune] Found \$TOTAL disabled copies (timestamped=\$CNT_TS base=\$KEEP_BASE) retain \$R (+base always)\"; printf '%s\n' \"\$BASE\" \$TS_LIST | nl -ba | sed 's/^/[prune][all] /'; if [ \$CNT_TS -le \$R ]; then echo '[prune] Nothing to prune (timestamped within retention)'; exit 0; fi; DEL_LIST=\"\$(printf '%s\n' \"\$TS_LIST\" | tail -n +\$((R + 1)))\"; printf '%s\n' \"\$DEL_LIST\" | while IFS= read -r d; do [ -n \"\$d\" ] && echo \"[prune][del] \$d\" && rm -rf -- \"\$d\"; done" || true
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "P='$HOSTINGER_PATH'; R='$RETAIN_COUNT'; CD=\"\$P/wp-content/plugins\"; if [ ! -d \"\$CD\" ]; then echo '[prune] Plugin dir missing:' \"\$CD\"; exit 0; fi; cd \"\$CD\" || exit 0; BASE='litespeed-cache.disabled'; if [ -d \"\$BASE\" ]; then KEEP_BASE=1; else KEEP_BASE=0; fi; TS_LIST=\"\$(ls -1dt litespeed-cache.disabled.[0-9]* 2>/dev/null || true)\"; if [ -z \"\$TS_LIST\" ] && [ \$KEEP_BASE -eq 0 ]; then echo '[prune] Nothing to prune'; exit 0; fi; CNT_TS=\"\$(printf '%s\n' \"\$TS_LIST\" | grep -c . || true)\"; TOTAL=\$CNT_TS; if [ \$KEEP_BASE -eq 1 ]; then TOTAL=\$((TOTAL+1)); fi; echo \"[prune] Found \$TOTAL disabled copies (timestamped=\$CNT_TS base=\$KEEP_BASE) retain \$R (+base always if present)\"; if [ \$KEEP_BASE -eq 1 ]; then printf '%s\n' \"\$BASE\" \$TS_LIST | nl -ba | sed 's/^/[prune][all] /'; else printf '%s\n' \"\$TS_LIST\" | nl -ba | sed 's/^/[prune][all] /'; fi; if [ \$CNT_TS -le \$R ]; then echo '[prune] Nothing to prune (timestamped within retention)'; exit 0; fi; DEL_LIST=\"\$(printf '%s\n' \"\$TS_LIST\" | tail -n +\$((R + 1)))\"; printf '%s\n' \"\$DEL_LIST\" | while IFS= read -r d; do [ -n \"\$d\" ] && echo \"[prune][del] \$d\" && rm -rf -- \"\$d\"; done" || true
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
@@ -557,10 +557,12 @@ jobs:
             "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS")
           REMOTE_DIR="${HOSTINGER_PATH%/}"
           echo "[deploy] Marker JSON size: $(printf '%s' "$JSON" | wc -c) bytes"
-          printf '%s' "$JSON" | sha256sum | awk '{print "[deploy] Marker sha256 " $1}'
+          HASH=$(printf '%s' "$JSON" | sha256sum | awk '{print $1}')
+          echo "[deploy] Marker sha256 $HASH"
           printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
             || { echo '[error] Failed to stream marker to remote'; exit 1; }
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 400 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
+          echo "MARKER_SHA256=$HASH" >> $GITHUB_ENV
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
@@ -785,16 +787,28 @@ jobs:
           # Basic JSON validity (counts braces & quotes balance heuristic)
           if [ $(grep -o '{' "$MARKER_LOCAL" | wc -l) -lt 1 ] || [ $(grep -o '}' "$MARKER_LOCAL" | wc -l) -lt 1 ]; then
             echo "[validate][fatal] Marker appears malformed"; exit 1; fi
+          # Re-hash marker and compare with earlier recorded hash (if available)
+          CURRENT_HASH=$(sha256sum "$MARKER_LOCAL" | awk '{print $1}')
+          if [ -n "$MARKER_SHA256" ]; then
+            if [ "$CURRENT_HASH" != "$MARKER_SHA256" ]; then
+              echo "[validate][fatal] Marker hash mismatch (expected $MARKER_SHA256 got $CURRENT_HASH)"; exit 1
+            else
+              echo "[validate] Marker hash matches recorded value ($CURRENT_HASH)"
+            fi
+          else
+            echo "[validate][info] No prior MARKER_SHA256 baseline available for comparison"
+          fi
           echo "[validate] Marker structure OK"
           # Build validation JSON summary
-          printf '{"original_lines":%s,"final_lines":%s,"wp_cache_defines":%s,"final_md5":"%s","marker_size":%s,"timestamp":"%s"}\n' \
-            "$ORIG_LINES" "$FINAL_LINES" "$WP_CACHE_COUNT" "$FINAL_MD5" "$(wc -c < "$MARKER_LOCAL" 2>/dev/null || echo 0)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > validation-summary.json
+          printf '{"original_lines":%s,"final_lines":%s,"wp_cache_defines":%s,"final_md5":"%s","marker_size":%s,"marker_hash":"%s","timestamp":"%s"}\n' \
+            "$ORIG_LINES" "$FINAL_LINES" "$WP_CACHE_COUNT" "$FINAL_MD5" "$(wc -c < "$MARKER_LOCAL" 2>/dev/null || echo 0)" "$CURRENT_HASH" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > validation-summary.json
           echo "[validate] Wrote validation-summary.json ($(wc -c < validation-summary.json) bytes)"
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          MARKER_SHA256: ${{ env.MARKER_SHA256 }}
 
       - name: Upload validation summary
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
