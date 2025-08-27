@@ -610,8 +610,30 @@ jobs:
           printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
             || { echo '[error] Failed to stream marker to remote'; exit 1; }
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 400 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
-          # Retrieve full remote marker locally for artifact upload & historical diffing
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat \"$REMOTE_DIR/.deploy-info.json\"" > .deploy-info.json.local || echo '[marker][warn] Unable to download marker to local workspace'
+          # Retrieve full remote marker locally for artifact upload & historical diffing (with retries + scp fallback)
+          RETR_OK=false
+          for attempt in 1 2 3; do
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat \"$REMOTE_DIR/.deploy-info.json\" 2>/dev/null" > .deploy-info.json.local.tmp 2>/dev/null || true
+            if [ -s .deploy-info.json.local.tmp ]; then
+              mv .deploy-info.json.local.tmp .deploy-info.json.local
+              echo "[marker] Retrieved marker locally on attempt $attempt"
+              RETR_OK=true
+              break
+            else
+              echo "[marker][retry] Attempt $attempt failed to fetch marker; sleeping before retry"
+              rm -f .deploy-info.json.local.tmp 2>/dev/null || true
+              sleep 2
+            fi
+          done
+          if [ "$RETR_OK" = false ]; then
+            echo "[marker][warn] Direct SSH retrieval failed after retries; attempting scp fallback"
+            scp -P "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_DIR/.deploy-info.json" .deploy-info.json.local 2>/dev/null || true
+          fi
+          if [ -s .deploy-info.json.local ]; then
+            echo "[marker] Local marker copy size: $(wc -c < .deploy-info.json.local) bytes"
+          else
+            echo '[marker][warn] Local marker unavailable after retries & fallback (artifact step will warn)'
+          fi
           echo "MARKER_SHA256=$HASH" >> $GITHUB_ENV
           echo "[deploy] Exported MARKER_SHA256 env=$HASH"
         env:
@@ -626,6 +648,7 @@ jobs:
         with:
           name: deploy-marker
           path: .deploy-info.json.local
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
 
@@ -805,11 +828,17 @@ jobs:
         run: |
           URL="${PRODUCTION_URL%/}/"
           echo "[smoke] Curling homepage: $URL"
-          HTTP_CODE=$(curl -s -o body.html -w '%{http_code}' "$URL" || echo 000)
-          echo "[smoke] Status: $HTTP_CODE"
-            head -n 60 body.html | sed 's/^/[smoke][body]/'
+          # Capture status, total time, size, final URL, redirects (avoid heredoc for YAML safety)
+          CURL_METRICS=$(curl -s -o body.html -w '%{http_code} %{time_total} %{size_download} %{url_effective} %{num_redirects}' "$URL" || echo "000 0 0 - 0")
+          read -r HTTP_CODE TIME_TOTAL SIZE_DL URL_EFF N_REDIRECTS <<< "$CURL_METRICS"
+          TIME_MS=$(awk -v t="$TIME_TOTAL" 'BEGIN{printf "%.0f", t*1000}')
+          echo "[smoke] Status: $HTTP_CODE time=${TIME_MS}ms redirects=$N_REDIRECTS size=${SIZE_DL}B url=$URL_EFF"
+          head -n 60 body.html | sed 's/^/[smoke][body]/'
           if [ "$HTTP_CODE" -ge 500 ]; then echo "[smoke] FAIL: HTTP $HTTP_CODE"; exit 1; fi
           if grep -qi 'critical error' body.html; then echo "[smoke] FAIL: Detected WordPress critical error banner"; exit 1; fi
+          echo "HOMEPAGE_STATUS=$HTTP_CODE" >> $GITHUB_ENV
+          echo "HOMEPAGE_TIME_MS=$TIME_MS" >> $GITHUB_ENV
+          echo "HOMEPAGE_REDIRECTS=$N_REDIRECTS" >> $GITHUB_ENV
           echo "[smoke] PASS"
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
@@ -821,11 +850,16 @@ jobs:
           ADMIN_URL="$BASE/wp-admin/"
           echo "[smoke-admin] Curling: $ADMIN_URL"
           # Follow redirects to capture final status/content
-          ADMIN_CODE=$(curl -s -L -o admin.html -w '%{http_code}' "$ADMIN_URL" || echo 000)
-          echo "[smoke-admin] HTTP $ADMIN_CODE (expected 200 logged-in or 200/302->login sequence)"
+          CURL_ADMIN=$(curl -s -L -o admin.html -w '%{http_code} %{time_total} %{size_download} %{url_effective} %{num_redirects}' "$ADMIN_URL" || echo "000 0 0 - 0")
+          read -r ADMIN_CODE ADMIN_TIME ADMIN_SIZE ADMIN_URL_EFF ADMIN_REDIRECTS <<< "$CURL_ADMIN"
+          ADMIN_TIME_MS=$(awk -v t="$ADMIN_TIME" 'BEGIN{printf "%.0f", t*1000}')
+          echo "[smoke-admin] HTTP $ADMIN_CODE time=${ADMIN_TIME_MS}ms redirects=$ADMIN_REDIRECTS size=${ADMIN_SIZE}B (expected 200 or redirect to login)"
           head -n 40 admin.html | sed 's/^/[smoke-admin][body]/'
           if [ "$ADMIN_CODE" -ge 500 ]; then echo "[smoke-admin] FAIL: $ADMIN_CODE"; exit 1; fi
           if grep -qi 'critical error' admin.html; then echo "[smoke-admin] FAIL: Detected WordPress critical error banner"; exit 1; fi
+          echo "ADMIN_STATUS=$ADMIN_CODE" >> $GITHUB_ENV
+          echo "ADMIN_TIME_MS=$ADMIN_TIME_MS" >> $GITHUB_ENV
+          echo "ADMIN_REDIRECTS=$ADMIN_REDIRECTS" >> $GITHUB_ENV
           echo "[smoke-admin] PASS"
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
@@ -924,6 +958,12 @@ jobs:
           if [ -n "${{ env.MARKER_SHA256 }}" ]; then echo "summary.marker_sha256=${{ env.MARKER_SHA256 }}"; fi
           if [ -n "${{ env.DRIFT_STATUS }}" ]; then echo "summary.drift=${{ env.DRIFT_STATUS }}"; fi
           if [ -n "${{ env.JQ_VERSION }}" ]; then echo "summary.jq=${{ env.JQ_VERSION }}"; fi
+          if [ -n "${{ env.HOMEPAGE_STATUS }}" ]; then echo "summary.home.status=${{ env.HOMEPAGE_STATUS }}"; fi
+          if [ -n "${{ env.HOMEPAGE_TIME_MS }}" ]; then echo "summary.home.time_ms=${{ env.HOMEPAGE_TIME_MS }}"; fi
+          if [ -n "${{ env.HOMEPAGE_REDIRECTS }}" ]; then echo "summary.home.redirects=${{ env.HOMEPAGE_REDIRECTS }}"; fi
+          if [ -n "${{ env.ADMIN_STATUS }}" ]; then echo "summary.admin.status=${{ env.ADMIN_STATUS }}"; fi
+          if [ -n "${{ env.ADMIN_TIME_MS }}" ]; then echo "summary.admin.time_ms=${{ env.ADMIN_TIME_MS }}"; fi
+          if [ -n "${{ env.ADMIN_REDIRECTS }}" ]; then echo "summary.admin.redirects=${{ env.ADMIN_REDIRECTS }}"; fi
           if [ -f validation-summary.json ]; then
             if command -v jq >/dev/null 2>&1; then
               jq -r '"summary.config_lines=" + (.original_lines|tostring) + "/" + (.final_lines|tostring) + " summary.marker_size=" + (.marker_size|tostring) + " summary.marker_hash_prefix=" + (.marker_hash[0:16])' validation-summary.json || true
