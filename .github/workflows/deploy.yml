@@ -56,6 +56,30 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
 
+      - name: Add Hostinger host key (known_hosts)
+        run: |
+          set -e
+          : "Adding host key for $HOSTINGER_SSH_HOST:$HOSTINGER_SSH_PORT"
+          mkdir -p ~/.ssh
+          # Remove any existing lines for host:port to avoid duplicates (ssh-keyscan does not include port, so just host)
+          if [ -f ~/.ssh/known_hosts ]; then
+            grep -v "^$HOSTINGER_SSH_HOST[[:space:]]" ~/.ssh/known_hosts > ~/.ssh/known_hosts.tmp || true
+            mv ~/.ssh/known_hosts.tmp ~/.ssh/known_hosts
+          fi
+          echo "[ssh] Scanning host key..."
+          KEYS=$(ssh-keyscan -p "$HOSTINGER_SSH_PORT" -T 10 "$HOSTINGER_SSH_HOST" 2>/dev/null | grep -v '^#' || true)
+          if [ -z "$KEYS" ]; then echo "[ssh][error] ssh-keyscan returned no keys for $HOSTINGER_SSH_HOST:$HOSTINGER_SSH_PORT"; exit 1; fi
+            printf '%s\n' "$KEYS" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          echo "[ssh] Added $(printf '%s' "$KEYS" | grep -c '^' || echo 0) key line(s) to known_hosts"
+          # Show fingerprint (first key)
+          printf '%s\n' "$KEYS" | head -n1 | awk '{print "[ssh] First key type=" $2}' || true
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+
+
       - name: Pre-audit remote environment
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
@@ -135,9 +159,6 @@ jobs:
           echo "[audit-pre] Missing count: $MISS"
           echo "missing_count=$MISS" >> $GITHUB_OUTPUT
           [ "$MISS" -gt 0 ] && echo "[audit-pre] WARNING: $MISS required path(s) missing."
-          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
-          AUDIT_INPUT: ${{ github.event.inputs.audit }}
 
       - name: List remote plugins (debug)
         if: ${{ github.event.inputs.audit != 'true' }}
