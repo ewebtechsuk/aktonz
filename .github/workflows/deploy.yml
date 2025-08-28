@@ -498,6 +498,29 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Aggressive LiteSpeed neutralization & OPcache reset
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          echo "[ls-aggressive] Starting aggressive neutralization phase"
+          # 1. Replace any LiteSpeed object-cache drop-in with inert core cache loader
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'OC="$HOSTINGER_PATH/wp-content/object-cache.php"; if [ -f "$OC" ] && grep -qi litespeed "$OC"; then cp "$OC" "$OC.ci.bak.$(date +%s)"; printf "<?php\\n// Inert object-cache stub inserted by CI\\nrequire_once ABSPATH . WPINC . "/cache.php";" > "$OC" && echo "[ls-aggressive][object-cache] Replaced LiteSpeed object-cache.php with inert stub"; else echo "[ls-aggressive][object-cache] No LiteSpeed signature present or file missing"; fi' || true
+          # 2. Delete all disabled litespeed-cache variant directories to prevent autoloading old compiled code
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'PLUGDIR="$HOSTINGER_PATH/wp-content/plugins"; if [ -d "$PLUGDIR" ]; then cd "$PLUGDIR"; for d in litespeed-cache.disabled* _off_litespeed-cache; do [ -d "$d" ] && echo "[ls-aggressive][purge] Removing $d" && rm -rf -- "$d"; done; fi' || true
+          # 3. Ensure primary litespeed-cache directory is a minimal stub (not real code)
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'STUB="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"; MAIN="$STUB/litespeed-cache.php"; if [ -d "$STUB" ]; then if grep -q optimizer.cls.php -R "$STUB" 2>/dev/null; then echo "[ls-aggressive][warn] Real LiteSpeed code remnants found; purging"; rm -rf -- "$STUB"; fi; fi; if [ ! -d "$STUB" ]; then mkdir -p "$STUB"; printf "<?php\\n/* CI LiteSpeed Stub */\\nif(!defined(\"LITESPEED_DISABLE_ALL\"))define(\"LITESPEED_DISABLE_ALL\",true);return;" > "$MAIN"; echo "[ls-aggressive][stub] Stub plugin created"; else echo "[ls-aggressive][stub] Directory exists (assumed stub)"; fi' || true
+          # 4. OPcache reset via ephemeral PHP script (best-effort)
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'PHP_BIN="php"; if command -v "$PHP_BIN" >/dev/null 2>&1; then echo "<?php opcache_reset(); echo \"OPCACHE_RESET_OK\n\";" > "$HOSTINGER_PATH/opcache_reset_ci.php"; OUT=$($PHP_BIN "$HOSTINGER_PATH/opcache_reset_ci.php" 2>&1 || true); echo "[ls-aggressive][opcache] $OUT"; rm -f "$HOSTINGER_PATH/opcache_reset_ci.php" || true; else echo "[ls-aggressive][opcache] php binary not available"; fi' || true
+          # 5. Deep search for any remaining optimizer file
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'find "$HOSTINGER_PATH/wp-content" -maxdepth 5 -type f -name optimizer.cls.php 2>/dev/null | sed "s#^#[ls-aggressive][residual] #" || true' || true
+          echo "[ls-aggressive] Completed aggressive neutralization phase"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Stop after audit (audit-only)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.audit == 'true' }}
         run: |
@@ -518,6 +541,7 @@ jobs:
           ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade" ".DS_Store" "**/.DS_Store"
             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
             "aktonz-local-copy" # local backup snapshot, never deploy
+            "wp-content/plugins/litespeed-cache" # exclude problematic LiteSpeed plugin entirely (neutralized)
           )
 
           # Exclude remote-only or dynamically generated directories that are not tracked in the repo but required in production.
@@ -673,6 +697,32 @@ jobs:
             # If directory exists after our earlier rename attempt, record its contents for debugging.
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-post][dir] /'" || true
           fi
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Assert LiteSpeed optimizer absent (hard fail if real code persists)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set -e
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          PLUG_DIR="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
+          # If optimizer.cls.php exists we are still shipping real plugin code (should be excluded/renamed) -> fail fast.
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PLUG_DIR/src/optimizer.cls.php' ]"; then
+            echo "[litespeed-assert][fail] Real LiteSpeed optimizer code still present at $PLUG_DIR/src/optimizer.cls.php" >&2
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1R '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-assert][dir] /'" || true
+            exit 1
+          fi
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$PLUG_DIR' ]"; then
+            echo "[litespeed-assert] Directory exists (likely stub); listing for verification:" 
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-assert][stub] /'" || true
+          else
+            echo "[litespeed-assert] No litespeed-cache directory present (expected after exclusion)"
+          fi
+          echo "[litespeed-assert] Passed: no optimizer.cls.php detected."
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}

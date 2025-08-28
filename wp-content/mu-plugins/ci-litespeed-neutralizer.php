@@ -52,6 +52,31 @@ if ( ! function_exists( 'litespeed_optm' ) ) {
 	}
 }
 
+// Namespaced stub(s) matching typical LiteSpeed class names to prevent autoloader attempts.
+// Some versions reference \LiteSpeed\Optimizer; we provide a no-op shell.
+if ( ! class_exists( '\\LiteSpeed\\Optimizer', false ) ) {
+	// phpcs:ignore PSR1.Classes.ClassDeclaration.MissingNamespace
+	class LiteSpeed_Optimizer_Namespace_Stub { public function __call( $n, $a ) { return false; } public static function __callStatic( $n, $a ) { return false; } }
+	// Create alias into expected FQCN if possible (cannot declare namespaced class inline easily without namespace block here)
+	if ( ! class_exists( 'LiteSpeed\\Optimizer', false ) ) {
+		// Use class_alias to satisfy references to \LiteSpeed\Optimizer
+		class_alias( 'LiteSpeed_Optimizer_Namespace_Stub', 'LiteSpeed\\Optimizer' );
+	}
+}
+
+// Suppress md5_file warnings on transient missing tmp assets that were causing fatals when converted to ErrorException.
+// We only intercept warnings containing 'md5_file' and 'litespeed' substrings to limit scope.
+if ( ! function_exists( '__ci_ls_md5_handler' ) ) {
+	function __ci_ls_md5_handler( $errno, $errstr ) {
+		if ( stripos( $errstr, 'md5_file' ) !== false && stripos( $errstr, 'litespeed' ) !== false ) {
+			// Swallow and mark handled.
+			return true;
+		}
+		return false; // Allow normal handling.
+	}
+	set_error_handler( '__ci_ls_md5_handler', E_WARNING | E_NOTICE | E_USER_WARNING );
+}
+
 // Marker so diagnostics can confirm neutralizer loaded.
 if ( ! defined( 'CI_LITESPEED_NEUTRALIZER_ACTIVE' ) ) {
 	define( 'CI_LITESPEED_NEUTRALIZER_ACTIVE', true );
