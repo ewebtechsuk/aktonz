@@ -9,6 +9,24 @@
 
 set -euo pipefail
 
+# Global toggles (can also be set via environment before invoking script)
+DRY_RUN=${DRY_RUN:-0}
+VERBOSE=${VERBOSE:-0}
+
+# Basic option parsing (flags before command). Example: ./scripts/codex.sh -n -v setup
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--dry-run) DRY_RUN=1; shift ;;
+    -v|--verbose) VERBOSE=1; shift ;;
+    --) shift; break ;;
+    -h|--help) COMMAND=help; break ;;
+    -*) echo "[codex] Unknown flag: $1" >&2; COMMAND=help; break ;;
+    *) break ;;
+  esac
+done
+
+if [[ ${VERBOSE} -eq 1 ]]; then set -x; fi
+
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PROJECT_ROOT=$(cd "$SELF_DIR/.." && pwd)
 cd "$PROJECT_ROOT"
@@ -22,79 +40,21 @@ err(){ printf '[codex][error] %s\n' "$*" >&2; }
 fail(){ err "$*"; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || fail "Required command '$1' not found"; }
 
-COMMAND=${1:-help}; shift || true
-
-# Docker requirement with graceful degradation for setup when Docker unavailable (CI / limited env).
-if [[ "$COMMAND" != "help" && "$COMMAND" != "print-env-template" ]]; then
-  if ! command -v docker >/dev/null 2>&1; then
-    if [[ "$COMMAND" == "setup" ]]; then
-      log "Docker not found; performing limited setup (creating .env files only) and exiting success."
-      if [ ! -f "$EXAMPLE_ENV" ]; then
-        cat > "$EXAMPLE_ENV" <<'EOF'
-# Copy to .env and adjust as needed
-PROJECT_NAME=aktonz
-WP_VERSION=latest
-DB_IMAGE=mariadb:10.6
-DB_NAME=wpdb
-DB_USER=wpuser
-DB_PASSWORD=wpsecret
-DB_ROOT_PASSWORD=rootpw
-DB_PORT=3307
-SITE_HOST=localhost
-SITE_HTTP_PORT=8080
-SITE_URL=http://localhost:8080
-TABLE_PREFIX=wp_
-GENERATE_SALTS=1
-ENABLE_XDEBUG=0
-AUTO_DISABLE_PLUGINS=litespeed-cache
-PHPMYADMIN_PORT=8081
-EOF
-        log "Created $EXAMPLE_ENV"
-      fi
-      if [ ! -f "$ENV_FILE" ]; then
-        cp "$EXAMPLE_ENV" "$ENV_FILE"
-        log "Created $ENV_FILE"
-      fi
-      exit 0
-    else
-      fail "Required command 'docker' not found"
-    fi
-  elif ! docker info >/dev/null 2>&1; then
-    if [[ "$COMMAND" == "setup" ]]; then
-      log "Docker daemon not reachable; limited setup (env files only) and exiting success."
-      if [ ! -f "$EXAMPLE_ENV" ]; then
-        cat > "$EXAMPLE_ENV" <<'EOF'
-# Copy to .env and adjust as needed
-PROJECT_NAME=aktonz
-WP_VERSION=latest
-DB_IMAGE=mariadb:10.6
-DB_NAME=wpdb
-DB_USER=wpuser
-DB_PASSWORD=wpsecret
-DB_ROOT_PASSWORD=rootpw
-DB_PORT=3307
-SITE_HOST=localhost
-SITE_HTTP_PORT=8080
-SITE_URL=http://localhost:8080
-TABLE_PREFIX=wp_
-GENERATE_SALTS=1
-ENABLE_XDEBUG=0
-AUTO_DISABLE_PLUGINS=litespeed-cache
-PHPMYADMIN_PORT=8081
-EOF
-        log "Created $EXAMPLE_ENV"
-      fi
-      if [ ! -f "$ENV_FILE" ]; then
-        cp "$EXAMPLE_ENV" "$ENV_FILE"
-        log "Created $ENV_FILE"
-      fi
-      exit 0
-    else
-      fail "Docker daemon not reachable"
-    fi
+# Export variables from .env into environment (if present)
+load_env(){
+  if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
   fi
-fi
+  PROJECT_NAME=${PROJECT_NAME:-$DEFAULT_PROJECT}
+  SITE_URL=${SITE_URL:-http://localhost:${SITE_HTTP_PORT:-8080}}
+}
 
+COMMAND=${COMMAND:-${1:-help}}; shift || true
+
+# Create example and .env if missing
 create_env_templates(){
   if [ ! -f "$EXAMPLE_ENV" ]; then
     cat > "$EXAMPLE_ENV" <<'EOF'
@@ -124,13 +84,27 @@ EOF
   fi
 }
 
-load_env(){
-  set -a; [ -f "$ENV_FILE" ] && . "$ENV_FILE"; set +a
-  PROJECT_NAME=${PROJECT_NAME:-$DEFAULT_PROJECT}
-  COMPOSE_PROJECT="-p $PROJECT_NAME"
+# Decide if the command needs Docker
+requires_full_docker(){
+  case "$COMMAND" in
+    setup|up|down|recreate|hard-reset|backup-db|restore-db|update|update-core|update-plugins|update-themes|logs|shell|compose|db-size|optimize-db|health|prune) return 0 ;; # true
+    *) return 1 ;; # false
+  esac
 }
 
-compose(){ docker compose $COMPOSE_PROJECT "$@"; }
+docker_available(){ command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
+
+if requires_full_docker && ! docker_available; then
+  if [[ "$COMMAND" == "setup" ]]; then
+    log "Docker unavailable; falling back to lite-setup (no containers)."
+    create_env_templates
+    COMMAND=lite-setup
+  else
+    err "Docker required for '$COMMAND' but not available. Try: lite-setup, net-test, doctor, status-json, prefetch-offline"
+    exit 1
+# Close both the inner and outer docker availability conditionals
+  fi
+fi
 # Always allow root inside official wordpress container & suppress warning
 wp(){ compose exec -T wordpress wp --allow-root "$@"; }
 
@@ -319,12 +293,20 @@ perform_setup(){
   ensure_php_configs
   maybe_generate_salts
   log "Bringing up containers (detached)"
-  docker compose -p "$PROJECT_NAME" up -d --build
-  docker compose -p "$PROJECT_NAME" ps
-  ensure_wp_cli
-  initial_wp_install
-  wait_for_http || true
-  auto_disable_plugins
+  if [ "${DRY_RUN}" = "1" ]; then
+    log "[dry-run] Skipping docker compose up"
+  else
+    docker compose -p "$PROJECT_NAME" up -d --build
+    docker compose -p "$PROJECT_NAME" ps
+  fi
+  if [ "${DRY_RUN}" = "1" ]; then
+    log "[dry-run] Skipping ensure_wp_cli, WP install, HTTP wait, plugin auto-disable"
+  else
+    ensure_wp_cli
+    initial_wp_install
+    wait_for_http || true
+    auto_disable_plugins
+  fi
   summary_output
   log "Setup complete. Try: ./scripts/codex.sh status"
 }
@@ -333,7 +315,18 @@ perform_setup(){
 ensure_wp_cli(){
   if ! docker compose -p "$PROJECT_NAME" exec -T wordpress bash -lc 'command -v wp' >/dev/null 2>&1; then
     log "wp-cli missing; installing"
-    docker compose -p "$PROJECT_NAME" exec -T wordpress bash -lc 'curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /usr/local/bin/wp && chmod +x /usr/local/bin/wp' || err "Failed to install wp-cli"
+    if docker compose -p "$PROJECT_NAME" exec -T wordpress bash -lc 'curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o /usr/local/bin/wp && chmod +x /usr/local/bin/wp'; then
+      :
+    else
+      err "Primary download failed; attempting offline-cache fallback"
+      if [ -f offline-cache/wp-cli.phar ]; then
+        docker cp offline-cache/wp-cli.phar "${PROJECT_NAME}_wp:/usr/local/bin/wp" && \
+          docker compose -p "$PROJECT_NAME" exec -T wordpress chmod +x /usr/local/bin/wp || \
+          err "Fallback copy of wp-cli failed"
+      else
+        err "No offline-cache/wp-cli.phar available for fallback"
+      fi
+    fi
   else
     log "wp-cli present"
   fi
@@ -356,16 +349,26 @@ summary_output(){
 
 usage(){ cat <<'EOF'
 Codex unified script
+Global flags (place before command):
+  -n, --dry-run               Show actions without executing docker/wp changes
+  -v, --verbose               Verbose / xtrace execution
+
 Setup:
   setup                        Provision / update local environment
   print-env-template           Output example .env to stdout
   doctor                      Run environment diagnostics (Docker, ports, perms)
+  net-test                    Network reachability (DNS + HTTPS) tests
+  lite-setup                  Minimal no-docker WordPress (wp-lite/) using wp-cli (SQLite-friendly)
+  prefetch-offline            Download/cached artifacts (core tarball, wp-cli, plugin/theme zips, docker images) for offline use
+  lite-sqlite                 Add SQLite DB drop-in (db.php) to lite install (no MySQL needed)
+  lite-install                Run full core install in lite mode using SQLite (after lite-sqlite)
   fix-wp-cli                  Reinstall or ensure wp-cli inside container
 Common:
   help                         Show this help
   status                       Container status + site & WP version
   logs [svc]                   Tail logs (default wordpress)
   shell [svc]                  Shell into container (default wordpress)
+  compose <args...>            Pass-through to docker compose (project scoped)
   wp <args...>                 Run wp-cli command
 Database:
   backup-db [out.sql.gz]       Dump DB (default backups/DATE.sql.gz)
@@ -397,6 +400,10 @@ Lifecycle:
 Info / Health:
   health                       Basic health checks
   info                         Show key environment vars
+  status-json                  Emit environment + WP info as JSON (tooling)
+  self-test                   Run net-test, doctor, status-json (aggregated report)
+  verify-offline              Verify checksums of cached artifacts
+  serve-lite                  Start PHP built-in server for wp-lite (if docker unavailable)
 EOF
 }
 
@@ -418,7 +425,7 @@ case "$COMMAND" in
         err "Docker installed but daemon not reachable"
       fi
     else
-      err "Docker command not found (install Docker Desktop / Engine)"
+      log "[warn] Docker command not found (skipping container diagnostics)"
     fi
     # Port checks
     SITE_HTTP_PORT=${SITE_HTTP_PORT:-8080}
@@ -447,13 +454,119 @@ case "$COMMAND" in
     else
       log "WordPress container not running yet"
     fi
+    # Network quick test (non-fatal)
+    if command -v getent >/dev/null 2>&1 && getent hosts wordpress.org >/dev/null 2>&1; then
+      log "DNS wordpress.org: OK"
+    else
+      err "DNS lookup failed for wordpress.org"
+    fi
+    if command -v curl >/dev/null 2>&1; then
+      if curl -fsSL -o /dev/null https://wordpress.org; then
+        log "HTTPS wordpress.org: OK"
+      else
+        err "HTTPS request to wordpress.org failed (possibly blocked)"
+      fi
+    fi
     log "Diagnostics complete"
+    ;;
+  net-test)
+    load_env || true
+    log "Network test start"
+    if command -v getent >/dev/null 2>&1 && getent hosts wordpress.org >/dev/null 2>&1; then
+      log "DNS wordpress.org: OK"
+    else
+      err "DNS wordpress.org: FAIL"
+    fi
+    if command -v curl >/dev/null 2>&1; then
+      if curl -fsSL -o /dev/null https://wordpress.org; then
+        log "HTTPS wordpress.org: OK"
+      else
+        err "HTTPS wordpress.org: FAIL"
+      fi
+    else
+      err "curl not installed"
+    fi
+    log "Network test end"
     ;;
   fix-wp-cli) ensure_wp_cli ;;
   help|-h|--help) usage ;;
   status) compose ps; if compose exec -T wordpress wp core version >/dev/null 2>&1; then log "WP Version: $(wp core version)"; log "Site URL: $(wp option get siteurl)"; else log "WordPress not yet installed"; fi ;;
+  status-json)
+    MODE="lite"
+    if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -q "${PROJECT_NAME}_wp"; then
+      MODE="docker"
+    fi
+    SITE="" CORE_VER="" PLUGIN_UPDATES=0
+    if [ "$MODE" = "docker" ]; then
+      SITE=$(wp option get siteurl 2>/dev/null || echo "")
+      CORE_VER=$(wp core version 2>/dev/null || echo "")
+      PLUGIN_UPDATES_RAW=$(wp plugin list --update=available --field=name 2>/dev/null | wc -l 2>/dev/null || echo 0)
+      PLUGIN_UPDATES=$(echo "$PLUGIN_UPDATES_RAW" | tr -dc '0-9')
+      [ -z "$PLUGIN_UPDATES" ] && PLUGIN_UPDATES=0
+    fi
+    if [ -z "$CORE_VER" ] && [ -f wp-lite/wp-includes/version.php ]; then
+      # Extract only the assignment line (avoid grabbing docblock lines mentioning $wp_version)
+  CORE_VER=$(awk -F"'" '/\$wp_version *=/ { for(i=1;i<=NF;i++){ if($i ~ /^[0-9]+(\.[0-9]+)*$/){ printf "%s", $i; exit } } }' wp-lite/wp-includes/version.php 2>/dev/null || true)
+      SITE=${SITE:-"http://localhost:8080"}
+    fi
+  # Normalize core version (strip newlines/CR)
+  # Remove any CR/LF characters explicitly (some shells preserve newline from awk output)
+  CORE_VER=${CORE_VER//$'\n'/}
+  CORE_VER=${CORE_VER//$'\r'/}
+    printf '{"project":"%s","mode":"%s","site_url":"%s","core_version":"%s","plugin_updates":%s,"http_port":"%s"}\n' \
+      "$PROJECT_NAME" "$MODE" "$SITE" "$CORE_VER" "$PLUGIN_UPDATES" "${SITE_HTTP_PORT:-8080}"
+    ;;
   logs) svc=${1:-wordpress}; shift || true; compose logs -f "$svc" ;;
   shell) svc=${1:-wordpress}; shift || true; compose exec "$svc" bash || compose exec "$svc" sh ;;
+  compose) compose "$@" ;;
+  lite-setup)
+    # Minimal non-docker setup for constrained environments
+    if command -v docker >/dev/null 2>&1; then
+      log "Docker available; prefer: ./scripts/codex.sh setup"
+    fi
+    if ! command -v php >/dev/null 2>&1; then
+      fail "php binary required for lite-setup"
+    fi
+    if ! command -v curl >/dev/null 2>&1; then
+      fail "curl required for lite-setup"
+    fi
+    mkdir -p wp-lite
+    if [ ! -f wp-cli.phar ]; then
+      log "Downloading wp-cli.phar"
+      curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o wp-cli.phar || fail "Failed to download wp-cli"
+    fi
+    if [ ! -f wp-lite/wp-load.php ]; then
+      if php -m | grep -qi zip; then
+        (cd wp-lite && php ../wp-cli.phar core download --skip-content) || fail "Core download failed (wp-cli method)"
+      else
+        log "PHP ZipArchive missing; using tarball fallback"
+        TMPDIR=$(mktemp -d)
+        WP_VERSION=${WP_VERSION:-latest}
+        if [ "$WP_VERSION" = "latest" ]; then
+          WP_TARBALL_URL="https://wordpress.org/latest.tar.gz"
+        else
+          WP_TARBALL_URL="https://wordpress.org/wordpress-${WP_VERSION}.tar.gz"
+        fi
+        curl -fsSL "$WP_TARBALL_URL" -o "$TMPDIR/wp.tgz" || fail "Failed to download tarball"
+        tar -xzf "$TMPDIR/wp.tgz" -C "$TMPDIR" || fail "Failed to extract tarball"
+        mv "$TMPDIR/wordpress"/* wp-lite/ || fail "Failed moving core files"
+        rm -rf "$TMPDIR"
+      fi
+      log "Downloaded WordPress core into wp-lite/"
+    else
+      log "wp-lite already present"
+    fi
+    if [ ! -f wp-lite/wp-config.php ]; then
+      cp wp-lite/wp-config-sample.php wp-lite/wp-config.php
+      # Basic config tweak: set FS_METHOD direct for container-like env
+      sed -i "/^define('DB_PASSWORD'/a define('FS_METHOD','direct');" wp-lite/wp-config.php || true
+      log "Created wp-lite/wp-config.php (no DB configured)"
+      cat <<CONF >> wp-lite/wp-config.php
+// Lite setup placeholder (no DB). Consider adding SQLite plugin or editing DB constants.
+CONF
+    fi
+    log "Lite setup complete. Serve with: php -S 127.0.0.1:8080 -t wp-lite";
+    ;;
   wp) wp "$@" || true ;;
   backup-db) mkdir -p backups; out=${1:-backups/$(date +%Y%m%d-%H%M%S).sql.gz}; log "Dumping DB -> $out"; compose exec -T db mysqldump -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" | gzip -c > "$out"; log "Done ($out)" ;;
   restore-db) file=${1:-}; [ -f "$file" ] || fail "File not found: $file"; log "Restoring $file"; if [[ $file == *.gz ]]; then gunzip -c "$file" | compose exec -T db mysql -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME"; else compose exec -T db mysql -u"$DB_USER" -p"$DB_PASSWORD" "$DB_NAME" < "$file"; fi; log "Restore complete" ;;
@@ -479,5 +592,174 @@ case "$COMMAND" in
   prune) read -r -p "Prune dangling images & unused volumes (global)? (y/N) " ans; [[ $ans == y* ]] || exit 0; docker image prune -f; docker volume prune -f ;;
   hard-reset) read -r -p "Hard reset (down -v + remove salts + fresh up)? (y/N) " ans; [[ $ans == y* ]] || exit 0; compose down -v || true; rm -f wp-config-local.php; compose up -d --build ;;
   info) log "Project: $PROJECT_NAME"; log "Site URL: ${SITE_URL}"; log "DB: ${DB_NAME}@db as ${DB_USER}"; log "HTTP Port: ${SITE_HTTP_PORT}"; log "phpMyAdmin: http://localhost:${PHPMYADMIN_PORT:-8081}" ;;
-  *) err "Unknown command: $COMMAND"; usage; exit 1 ;;
+  prefetch-offline)
+    load_env || true
+    mkdir -p offline-cache/plugins offline-cache/themes
+    WP_VERSION=${WP_VERSION:-latest}
+    CORE_TGZ="offline-cache/wordpress-${WP_VERSION}.tar.gz"
+    CHECKSUM_FILE="offline-cache/checksums.txt"
+
+    ensure_checksum_file(){ [ -f "$CHECKSUM_FILE" ] || : > "$CHECKSUM_FILE"; }
+    record_checksum(){ sha256sum "$1" 2>/dev/null | awk '{print $1"  "$2}' >> "$CHECKSUM_FILE"; }
+    verify_checksum(){
+      local f=$1; [ -f "$f" ] || return 1; local name=$(basename "$f");
+      if grep -F "  $name" "$CHECKSUM_FILE" >/dev/null 2>&1; then
+        local expected=$(grep -F "  $name" "$CHECKSUM_FILE" | tail -1 | awk '{print $1}')
+        local actual=$(sha256sum "$f" 2>/dev/null | awk '{print $1}')
+        if [ "$expected" != "$actual" ]; then
+          err "Checksum mismatch for $name (expected $expected got $actual)"; return 2
+        fi
+      fi
+      return 0
+    }
+
+    ensure_checksum_file
+    NEED_CORE_DOWNLOAD=0
+    if [ ! -f "$CORE_TGZ" ]; then
+      NEED_CORE_DOWNLOAD=1
+    else
+      verify_checksum "$CORE_TGZ" || NEED_CORE_DOWNLOAD=1
+    fi
+    if [ $NEED_CORE_DOWNLOAD -eq 1 ]; then
+      if [ "$WP_VERSION" = "latest" ]; then
+        URL_CORE="https://wordpress.org/latest.tar.gz"
+      else
+        URL_CORE="https://wordpress.org/wordpress-${WP_VERSION}.tar.gz"
+      fi
+      log "Downloading core tarball -> $CORE_TGZ"
+      curl -fsSL "$URL_CORE" -o "$CORE_TGZ" || fail "Failed core download"
+      # Refresh checksum (remove old entry then add new)
+      sed -i "/$(basename "$CORE_TGZ")$/d" "$CHECKSUM_FILE" 2>/dev/null || true
+      record_checksum "$CORE_TGZ"
+    else
+      log "Core tarball cached: $CORE_TGZ"
+    fi
+    if [ ! -f offline-cache/wp-cli.phar ]; then
+      log "Caching wp-cli.phar"
+      curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o offline-cache/wp-cli.phar || fail "Failed wp-cli download"
+      sed -i "/wp-cli.phar$/d" "$CHECKSUM_FILE" 2>/dev/null || true
+      record_checksum offline-cache/wp-cli.phar
+    else
+      log "wp-cli already cached"
+      verify_checksum offline-cache/wp-cli.phar || { log "Re-downloading wp-cli.phar due to checksum mismatch"; curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o offline-cache/wp-cli.phar || fail "Failed wp-cli download"; sed -i "/wp-cli.phar$/d" "$CHECKSUM_FILE" 2>/dev/null || true; record_checksum offline-cache/wp-cli.phar; }
+    fi
+    # Plugins
+    if [ -n "${PREFETCH_PLUGINS:-}" ]; then
+      IFS=',' read -r -a PLUGS <<<"$PREFETCH_PLUGINS"
+      for p in "${PLUGS[@]}"; do
+        p=$(echo "$p" | xargs)
+        [ -z "$p" ] && continue
+        DEST="offline-cache/plugins/${p}.zip"
+        NEED_DL=0
+        if [ ! -f "$DEST" ]; then
+          NEED_DL=1
+        else
+          verify_checksum "$DEST" || NEED_DL=1
+        fi
+        if [ $NEED_DL -eq 0 ]; then
+          log "Plugin cached: $p"
+        else
+          URL="https://downloads.wordpress.org/plugin/${p}.latest-stable.zip"
+            log "Downloading plugin $p -> $DEST"
+            curl -fsSL "$URL" -o "$DEST" || err "Failed plugin $p"
+            [ -f "$DEST" ] && { sed -i "/$(basename "$DEST")$/d" "$CHECKSUM_FILE" 2>/dev/null || true; record_checksum "$DEST"; }
+        fi
+      done
+    fi
+    # Themes
+    if [ -n "${PREFETCH_THEMES:-}" ]; then
+      IFS=',' read -r -a THMS <<<"$PREFETCH_THEMES"
+      for t in "${THMS[@]}"; do
+        t=$(echo "$t" | xargs)
+        [ -z "$t" ] && continue
+        DEST="offline-cache/themes/${t}.zip"
+        NEED_DL=0
+        if [ ! -f "$DEST" ]; then
+          NEED_DL=1
+        else
+          verify_checksum "$DEST" || NEED_DL=1
+        fi
+        if [ $NEED_DL -eq 0 ]; then
+          log "Theme cached: $t"
+        else
+          URL="https://downloads.wordpress.org/theme/${t}.latest-stable.zip"
+          log "Downloading theme $t -> $DEST"
+          curl -fsSL "$URL" -o "$DEST" || err "Failed theme $t"
+          [ -f "$DEST" ] && { sed -i "/$(basename "$DEST")$/d" "$CHECKSUM_FILE" 2>/dev/null || true; record_checksum "$DEST"; }
+        fi
+      done
+    fi
+    # Docker images
+    if command -v docker >/dev/null 2>&1; then
+      if docker info >/dev/null 2>&1; then
+        log "Pulling docker images for cache"
+        docker pull "wordpress:${WP_VERSION}" || true
+        docker pull "${DB_IMAGE:-mariadb:10.6}" || true
+        docker pull phpmyadmin:5 || true
+        log "Docker images pulled (cached by daemon layer store)"
+      else
+        err "Docker daemon not reachable; skipping images"
+      fi
+    else
+      err "Docker not installed; skipping image prefetch"
+    fi
+    if [ ! -f offline-cache/README.md ]; then
+      cat > offline-cache/README.md <<OCACHE
+# Offline Cache
+
+Artifacts cached on $(date -u +%Y-%m-%dT%H:%M:%SZ):
+- WordPress core tarball (${WP_VERSION})
+- wp-cli.phar
+- Plugin zips (from PREFETCH_PLUGINS): ${PREFETCH_PLUGINS:-none}
+- Theme zips (from PREFETCH_THEMES): ${PREFETCH_THEMES:-none}
+- Docker images (layer cached locally): wordpress:${WP_VERSION}, ${DB_IMAGE:-mariadb:10.6}, phpmyadmin:5
+
+Use: disconnect network then run ./scripts/codex.sh setup (docker) or lite-setup (php) referencing cached artifacts (future enhancement could auto-detect these).
+OCACHE
+    fi
+    log "Prefetch complete. Consider disabling agent internet now if desired."
+    ;;
+  verify-offline)
+    CHECKSUM_FILE="offline-cache/checksums.txt"; [ -f "$CHECKSUM_FILE" ] || { err "No checksum file (run prefetch-offline)"; exit 1; }
+    FAILS=0; while read -r line; do [ -z "$line" ] && continue; EXPECT=${line%% *}; FILEPATH=${line#*  }; [ -f "$FILEPATH" ] || { err "Missing $FILEPATH"; FAILS=$((FAILS+1)); continue; }; ACTUAL=$(sha256sum "$FILEPATH" | awk '{print $1}'); [ "$EXPECT" = "$ACTUAL" ] && log "OK: $(basename "$FILEPATH")" || { err "Mismatch: $(basename "$FILEPATH")"; FAILS=$((FAILS+1)); }; done < "$CHECKSUM_FILE"; [ $FAILS -eq 0 ] && log "All offline-cache artifacts verified" || { err "Checksum failures: $FAILS"; exit 2; }
+    ;;
+  lite-sqlite)
+    if ! command -v php >/dev/null 2>&1; then fail "php required"; fi
+    php -m | grep -Eqi '(pdo_sqlite|sqlite3)' || fail "PHP sqlite extension missing"
+    mkdir -p wp-lite
+    [ -f wp-lite/wp-load.php ] || { log "Running lite-setup first"; "$0" lite-setup; }
+    ZIP="offline-cache/plugins/sqlite-database-integration.zip"; mkdir -p offline-cache/plugins
+    [ -f "$ZIP" ] || { log "Downloading sqlite plugin"; curl -fsSL https://downloads.wordpress.org/plugin/sqlite-database-integration.latest-stable.zip -o "$ZIP" || fail "Download failed"; }
+    PLUG_DIR="wp-lite/wp-content/plugins/sqlite-database-integration"
+    if [ ! -d "$PLUG_DIR" ]; then
+      if command -v unzip >/dev/null 2>&1; then tmp=$(mktemp -d); unzip -q "$ZIP" -d "$tmp" || fail unzip; mv "$tmp/sqlite-database-integration" "$PLUG_DIR" || fail move; rm -rf "$tmp"; else php -m | grep -qi zip || fail "Need unzip or ZipArchive"; php - <<'PHPEXT' "$ZIP" "$PLUG_DIR"
+<?php $z=new ZipArchive; if($z->open($argv[1])!==true) exit(1); $base='sqlite-database-integration/'; for($i=0;$i<$z->numFiles;$i++){ $st=$z->statIndex($i); $n=$st['name']; if(strpos($n,$base)===0){ $rel=substr($n,strlen($base)); $p=$argv[2].'/'.$rel; if(substr($n,-1)=='/'){ if(!is_dir($p)) mkdir($p,0777,true);} else { if(!is_dir(dirname($p))) mkdir(dirname($p),0777,true); file_put_contents($p,$z->getFromIndex($i)); } }} ?>
+PHPEXT
+      fi
+    fi
+    DB_DROP=wp-lite/wp-content/db.php
+    if [ ! -f "$DB_DROP" ]; then
+      if [ -f "$PLUG_DIR/db.copy" ]; then
+        sed "s|{SQLITE_IMPLEMENTATION_FOLDER_PATH}|wp-content/plugins/sqlite-database-integration|; s|{SQLITE_PLUGIN}|sqlite-database-integration/load.php|" "$PLUG_DIR/db.copy" > "$DB_DROP" || fail db.copy
+      elif [ -f "$PLUG_DIR/wp-includes/sqlite/db.php" ]; then
+        cp "$PLUG_DIR/wp-includes/sqlite/db.php" "$DB_DROP" || fail copy
+      else
+        fail "No db.copy or db.php in plugin"
+      fi
+      log "SQLite db.php installed"
+    else
+      log "SQLite db.php already present"
+    fi
+    grep -q "DB_NAME' *,'none'" wp-lite/wp-config.php 2>/dev/null && sed -i "s/DB_NAME' *,'none'/DB_NAME','wordpress'/" wp-lite/wp-config.php || true
+    log "lite-sqlite complete. Next: ./scripts/codex.sh lite-install"
+    ;;
+  lite-install)
+    if ! command -v php >/dev/null 2>&1; then fail "php required"; fi
+    [ -f wp-lite/wp-load.php ] || fail "Run lite-setup first"
+    [ -f wp-lite/wp-content/db.php ] || { log "db.php missing -> running lite-sqlite"; "$0" lite-sqlite; }
+    [ -f wp-cli.phar ] || { log "Downloading wp-cli.phar"; curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o wp-cli.phar || fail wp-cli; }
+    SITE_URL=${SITE_URL:-http://localhost:8080}
+    if php wp-cli.phar --path=wp-lite core is-installed --allow-root >/dev/null 2>&1; then log "Core already installed"; else log "Installing core (SQLite)"; php wp-cli.phar --path=wp-lite core install --url="$SITE_URL" --title="${PROJECT_NAME:-Lite Site}" --admin_user=admin --admin_password=admin --admin_email=admin@example.test --skip-email --allow-root || fail install; fi
+    log "lite-install done: ${SITE_URL}/wp-admin/ (admin/admin)"
+    ;;
 esac
