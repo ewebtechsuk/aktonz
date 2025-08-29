@@ -24,10 +24,75 @@ need(){ command -v "$1" >/dev/null 2>&1 || fail "Required command '$1' not found
 
 COMMAND=${1:-help}; shift || true
 
-# Ensure docker for all commands except pure help generation if not needed.
+# Docker requirement with graceful degradation for setup when Docker unavailable (CI / limited env).
 if [[ "$COMMAND" != "help" && "$COMMAND" != "print-env-template" ]]; then
-  need docker
-  if ! docker info >/dev/null 2>&1; then fail "Docker daemon not reachable"; fi
+  if ! command -v docker >/dev/null 2>&1; then
+    if [[ "$COMMAND" == "setup" ]]; then
+      log "Docker not found; performing limited setup (creating .env files only) and exiting success."
+      if [ ! -f "$EXAMPLE_ENV" ]; then
+        cat > "$EXAMPLE_ENV" <<'EOF'
+# Copy to .env and adjust as needed
+PROJECT_NAME=aktonz
+WP_VERSION=latest
+DB_IMAGE=mariadb:10.6
+DB_NAME=wpdb
+DB_USER=wpuser
+DB_PASSWORD=wpsecret
+DB_ROOT_PASSWORD=rootpw
+DB_PORT=3307
+SITE_HOST=localhost
+SITE_HTTP_PORT=8080
+SITE_URL=http://localhost:8080
+TABLE_PREFIX=wp_
+GENERATE_SALTS=1
+ENABLE_XDEBUG=0
+AUTO_DISABLE_PLUGINS=litespeed-cache
+PHPMYADMIN_PORT=8081
+EOF
+        log "Created $EXAMPLE_ENV"
+      fi
+      if [ ! -f "$ENV_FILE" ]; then
+        cp "$EXAMPLE_ENV" "$ENV_FILE"
+        log "Created $ENV_FILE"
+      fi
+      exit 0
+    else
+      fail "Required command 'docker' not found"
+    fi
+  elif ! docker info >/dev/null 2>&1; then
+    if [[ "$COMMAND" == "setup" ]]; then
+      log "Docker daemon not reachable; limited setup (env files only) and exiting success."
+      if [ ! -f "$EXAMPLE_ENV" ]; then
+        cat > "$EXAMPLE_ENV" <<'EOF'
+# Copy to .env and adjust as needed
+PROJECT_NAME=aktonz
+WP_VERSION=latest
+DB_IMAGE=mariadb:10.6
+DB_NAME=wpdb
+DB_USER=wpuser
+DB_PASSWORD=wpsecret
+DB_ROOT_PASSWORD=rootpw
+DB_PORT=3307
+SITE_HOST=localhost
+SITE_HTTP_PORT=8080
+SITE_URL=http://localhost:8080
+TABLE_PREFIX=wp_
+GENERATE_SALTS=1
+ENABLE_XDEBUG=0
+AUTO_DISABLE_PLUGINS=litespeed-cache
+PHPMYADMIN_PORT=8081
+EOF
+        log "Created $EXAMPLE_ENV"
+      fi
+      if [ ! -f "$ENV_FILE" ]; then
+        cp "$EXAMPLE_ENV" "$ENV_FILE"
+        log "Created $ENV_FILE"
+      fi
+      exit 0
+    else
+      fail "Docker daemon not reachable"
+    fi
+  fi
 fi
 
 create_env_templates(){

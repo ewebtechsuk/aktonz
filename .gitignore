@@ -29,3 +29,5 @@ wp-content/themes.off/
 # Local deploy keys
 deploy_aktonz_key
 deploy_aktonz_key.pub
+code-manifest.json
+backups/
