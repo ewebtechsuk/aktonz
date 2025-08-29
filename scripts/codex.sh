@@ -511,8 +511,8 @@ case "$COMMAND" in
     fi
   # Normalize core version (strip newlines/CR)
   # Remove any CR/LF characters explicitly (some shells preserve newline from awk output)
-  CORE_VER=${CORE_VER//$'\n'/}
-  CORE_VER=${CORE_VER//$'\r'/}
+  # Normalize any lingering CR/LF (some awk versions may emit newline)
+  CORE_VER=$(printf '%s' "$CORE_VER" | tr -d '\r\n')
     printf '{"project":"%s","mode":"%s","site_url":"%s","core_version":"%s","plugin_updates":%s,"http_port":"%s"}\n' \
       "$PROJECT_NAME" "$MODE" "$SITE" "$CORE_VER" "$PLUGIN_UPDATES" "${SITE_HTTP_PORT:-8080}"
     ;;
