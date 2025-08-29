@@ -23,6 +23,21 @@ need(){ command -v "$1" >/dev/null 2>&1 || { err "Need $1"; exit 1; }; }
 need php; need curl
 php -m 2>/dev/null | grep -Eqi '(pdo_sqlite|sqlite3)' || { err "Missing SQLite PHP extension"; exit 1; }
 mkdir -p "$PLUG_CACHE" "$WP_PATH"
+
+# Idempotent fast path: if already installed, just ensure server + emit status JSON
+if [ -f "$WP_PATH/wp-load.php" ] && [ -f "$WP_CLI" ] && php "$WP_CLI" --path="$WP_PATH" core is-installed --allow-root >/dev/null 2>&1; then
+  log "Already installed (fast path)"
+  if ! pgrep -f "php -S 127.0.0.1:${PORT} -t ${WP_PATH}" >/dev/null 2>&1; then
+    log "Starting PHP server :$PORT"
+    (php -S 127.0.0.1:${PORT} -t "$WP_PATH" >/tmp/wp-lite-${PORT}.log 2>&1 &)
+    sleep 1
+  fi
+  VER=""; [ -f "$WP_PATH/wp-includes/version.php" ] && VER=$(awk -F"'" '/\$wp_version *=/ { for(i=1;i<=NF;i++){ if($i ~ /^[0-9]+(\.[0-9]+)*$/){ printf "%s", $i; exit } } }' "$WP_PATH/wp-includes/version.php" 2>/dev/null || true)
+  printf '{"mode":"lite","db":"sqlite","url":"%s","core_version":"%s","admin":"%s","user":"%s"}\n' "$SITE_URL" "$VER" "$SITE_URL/wp-admin/" "$ADMIN_USER"
+  log "Admin: $SITE_URL/wp-admin/ ($ADMIN_USER/$ADMIN_PASS)"
+  log "Done."
+  exit 0
+fi
 # Core fetch
 if [ ! -f "$WP_PATH/wp-load.php" ]; then
   [ -f "$CORE_TGZ" ] || { log "Download core"; mkdir -p "$CACHE_DIR"; curl -fsSL https://wordpress.org/latest.tar.gz -o "$CORE_TGZ"; }
