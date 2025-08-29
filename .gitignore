@@ -12,8 +12,6 @@ node_modules/
 vendor/
 aktonz-local-copy/
 aktonz-local-copy/aktonz-local-copy/
-wp-config.php
-aktonz-local-copy/*/wp-config.php
 
 wp-config-local.php
 .DS_Store
@@ -31,3 +29,6 @@ deploy_aktonz_key
 deploy_aktonz_key.pub
 code-manifest.json
 backups/
+wp-cli.phar
+offline-cache/
+wp-lite/
