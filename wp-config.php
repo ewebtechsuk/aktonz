@@ -1,12 +1,20 @@
 <?php
-// Load environment variables from .env if present
-$env_file = __DIR__.'/.env';
-if (file_exists($env_file)) {
-    foreach (parse_ini_file($env_file) as $key => $value) {
+// Load environment variables from .env then .env.deploy (production overrides) if present
+$env_primary = __DIR__.'/.env';
+if (file_exists($env_primary)) {
+    foreach (parse_ini_file($env_primary) as $key => $value) {
         if (getenv($key) === false) {
             putenv("$key=$value");
             $_ENV[$key] = $value;
         }
+    }
+}
+$env_deploy = __DIR__.'/.env.deploy';
+if (file_exists($env_deploy)) {
+    foreach (parse_ini_file($env_deploy) as $key => $value) {
+        // Always override with deploy values
+        putenv("$key=$value");
+        $_ENV[$key] = $value;
     }
 }
 
