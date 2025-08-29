@@ -114,6 +114,8 @@ EXCLUDES=(
   '--exclude' 'backups/'
   '--exclude' 'offline-cache/'
   '--exclude' 'wp-lite/'
+  '--exclude' '.env'
+  '--exclude' '.env.deploy'
   '--exclude' '*.log'
   '--exclude' '*.sql'
   '--exclude' 'node_modules/'
