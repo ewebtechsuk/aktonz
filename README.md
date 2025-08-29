@@ -83,6 +83,80 @@ Trigger: push to `main` or manual dispatch. Secrets required:
 
 ## Local "Codex" Development Environment
 
+## Production Data Sync (DB + Uploads)
+
+Scripts (in `scripts/`):
+
+- `prod_db_sync.sh` – Pull & optionally import the production MySQL database (Docker local DB) with safe pre-backup and optional URL search-replace.
+- `prod_full_sync.sh` – One-step wrapper: DB sync + uploads sync + optional URL replace.
+
+### Required Environment Variables (add to `.env`)
+| Var | Purpose |
+|-----|---------|
+| `PROD_SSH_HOST` | Production SSH host/IP |
+| `PROD_SSH_USER` | SSH user (with read access to WP + DB creds via `wp-config.php`) |
+| `PROD_SSH_PORT` | SSH port (default 22) |
+| `PROD_WP_PATH` | Absolute path to production WP root (contains `wp-config.php`) |
+| `PRODUCTION_URL` | Prod site base URL (used for search-replace) |
+| `LOCAL_URL` | Local site URL (defaults to `SITE_URL` or `http://localhost:8080`) |
+
+Optional (override auto-parse): `PROD_DB_NAME`, `PROD_DB_USER`, `PROD_DB_PASSWORD`, `PROD_DB_HOST`.
+
+### Full Sync Examples
+```bash
+# Dry-run (show what would happen)
+scripts/prod_full_sync.sh --dry-run
+
+# Full (DB + uploads) with archive method (default)
+scripts/prod_full_sync.sh
+
+# Incremental uploads via rsync (faster subsequent runs)
+scripts/prod_full_sync.sh --rsync
+
+# Uploads only (no DB import)
+scripts/prod_full_sync.sh --uploads-only --rsync
+
+# DB only, skip search-replace
+scripts/prod_full_sync.sh --db-only --no-replace
+
+# Provide exclude patterns for rsync (comma/colon separated)
+UPLOADS_RSYNC_EXCLUDES="cache,backup-*,*.tmp" scripts/prod_full_sync.sh --rsync
+```
+
+### Behavior & Safety
+- Always creates a timestamped DB backup locally before importing.
+- Archive mode tars remote uploads then extracts locally (renames previous uploads dir with `.pre-<timestamp>` for quick rollback).
+- Rsync mode is incremental, uses `--delete` to remove local files no longer on prod (mirror). Exclusions supported via `UPLOADS_RSYNC_EXCLUDES`.
+- URL search-replace skips `guid` column; disable with `--no-replace`.
+- `--dry-run` respected for both DB (delegated message) and uploads (archive or rsync).
+
+### When to Use Each Mode
+| Scenario | Recommended |
+|----------|-------------|
+| First large sync | Archive (default) |
+| Frequent iterative content sync | `--rsync` |
+| Need only new media (DB already current) | `--uploads-only --rsync` |
+| Investigating serialization issues | Run DB sync with `--no-replace` first, inspect, then re-run without flag |
+
+### Common Follow-up Checks
+```bash
+# Confirm site loads locally
+curl -I $LOCAL_URL
+
+# Spot-check a media file
+find wp-content/uploads -type f | head -5
+
+# Search-replace verification
+grep -R "${PRODUCTION_URL}" -n wp-content/uploads | head -20 || true
+```
+
+### Next Potential Enhancements (Optional)
+- Push mode (local -> staging) guard-railed by confirmation.
+- Media diff report (list added/removed vs last sync snapshot).
+- Scheduled CI job to refresh local cache of production DB/media (artifact only).
+
+---
+
 Unified helper script: `scripts/codex.sh`
 
 ### Quick Start
