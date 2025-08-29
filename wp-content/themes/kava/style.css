@@ -1655,3 +1655,35 @@ html {
 		align-self: flex-end;
 	}
 }
+
+/* Custom front page styles */
+.hero {
+    padding: 80px 0;
+    text-align: center;
+    background: #f5f5f5;
+}
+.hero h1 {
+    font-size: 3rem;
+    margin-bottom: 0.5rem;
+}
+.hero p {
+    margin-bottom: 1.5rem;
+}
+.hero .search-form {
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+.featured-properties {
+    padding: 40px 0;
+}
+.featured-properties .properties {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    justify-content: center;
+}
+.featured-properties article {
+    width: 280px;
+    text-align: center;
+}
