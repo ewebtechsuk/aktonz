@@ -1,0 +1,89 @@
+name: Remote Snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      include_tarball:
+        description: "Include tar.gz bundle of snapshot"
+        required: false
+        default: "true"
+  schedule:
+    # Daily 02:17 UTC snapshot
+    - cron: '17 2 * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+      HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+      HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+      HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+      # Optional baseline & thresholds for drift alerting
+      BASELINE_WP_CONFIG_LINES: ${{ secrets.BASELINE_WP_CONFIG_LINES }}
+      BASELINE_WP_CONFIG_MD5: ${{ secrets.BASELINE_WP_CONFIG_MD5 }}
+      MIN_WP_CONFIG_LINES: ${{ vars.MIN_WP_CONFIG_LINES }}
+      DRIFT_PERMISSIVE: ${{ secrets.DRIFT_PERMISSIVE }}
+      # Resolve tarball inclusion for both manual & scheduled triggers
+      SNAPSHOT_INCLUDE_TARBALL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_tarball || 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          log-public-key: false
+
+      - name: Run remote snapshot
+        env:
+          SNAPSHOT_TARBALL: ${{ env.SNAPSHOT_INCLUDE_TARBALL == 'true' && '1' || '0' }}
+        run: |
+          chmod +x scripts/remote_snapshot.sh
+          scripts/remote_snapshot.sh
+
+      - name: Drift / residue guard
+        run: |
+          set -euo pipefail
+          dir=$(ls -1d snapshot_* | tail -n1)
+          echo "Using snapshot dir: $dir"
+          jq '.' "$dir/snapshot.json" >/dev/null 2>&1 || { echo "snapshot.json unreadable"; exit 1; }
+          lines=$(jq '.wp_config.lines' "$dir/snapshot.json")
+            md5=$(jq -r '.wp_config.md5' "$dir/snapshot.json")
+          marker_present=$(jq '.marker_present' "$dir/snapshot.json")
+          echo "wp-config lines=$lines md5=$md5 marker_present=$marker_present"
+          base_lines=${BASELINE_WP_CONFIG_LINES:-}
+          base_md5=${BASELINE_WP_CONFIG_MD5:-}
+          min_lines=${MIN_WP_CONFIG_LINES:-95}
+          fail=0
+          if [ -n "$base_lines" ] && [ "$lines" != "$base_lines" ]; then
+            echo "[alert] wp-config line count drift: expected $base_lines got $lines"; fail=1; fi
+          if [ -n "$base_md5" ] && [ "$md5" != "$base_md5" ]; then
+            echo "[alert] wp-config md5 drift: expected $base_md5 got $md5"; fail=1; fi
+          if [ "$lines" -lt "$min_lines" ]; then
+            echo "[alert] wp-config lines below minimum ($lines < $min_lines)"; fail=1; fi
+          ls_hits=$(grep -c '^\[ls\]' "$dir/snapshot.log" || true)
+          if [ "$ls_hits" -gt 0 ]; then
+            echo "[alert] LiteSpeed residue detected ($ls_hits matches)"; fail=1; fi
+          if [ "$fail" -eq 1 ] && [ "${DRIFT_PERMISSIVE:-}" != "1" ]; then
+            echo "One or more drift conditions met (failing job)."; exit 1; else echo "No critical drift (or permissive mode)."; fi
+
+      - name: Upload snapshot artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-snapshot
+          path: |
+            snapshot_*/snapshot.log
+            snapshot_*/snapshot.json
+            snapshot_*/wp-config.headtail.txt
+            snapshot_*/deploy-info.json
+            snapshot_*/plugin_hashes.json
+            snapshot_*/theme_hashes.json
+            snapshot_*.tar.gz
+          if-no-files-found: warn
+          retention-days: 10
