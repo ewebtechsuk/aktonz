@@ -93,6 +93,20 @@ scripts/codex.sh setup
 Visit: http://localhost:8080 (default)
 phpMyAdmin: http://localhost:8081
 
+### Lite (No Docker) Fast Path (SQLite)
+For constrained or Codespaces style environments without reliable Docker:
+```bash
+sh codex_lite_sqlite_setup.sh   # fast path; exits quickly if already installed
+```
+Outputs a JSON status line and ensures a PHP built-in server on port 8080. The script is idempotent (subsequent runs skip downloads).
+
+To run lightweight health + optional updates afterwards:
+```bash
+sh scripts/maintenance_lite.sh --json
+```
+
+Important: Use only ONE setup command in automated platform config (either the Docker `scripts/codex.sh setup` or the lite `sh codex_lite_sqlite_setup.sh`) to avoid duplicate installs.
+
 ### Features (setup phase)
 1. Generates `.env.example` / `.env` if absent.
 2. Builds `docker-compose.yml` (WordPress + MariaDB + phpMyAdmin).
