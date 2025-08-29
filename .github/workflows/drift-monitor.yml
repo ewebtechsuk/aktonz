@@ -1,0 +1,157 @@
+name: Drift Monitor
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # Daily early-morning UTC check
+  workflow_dispatch:
+    inputs:
+      fail_on_drift:
+        description: 'If true, job fails when drift detected'
+        required: false
+        default: 'false'
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    env:
+      PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+
+      - name: Validate required secrets
+        run: |
+          REQ=(HOSTINGER_SSH_HOST HOSTINGER_SSH_USER HOSTINGER_SSH_PORT HOSTINGER_PATH)
+          MISS=()
+          for s in "${REQ[@]}"; do [ -z "${!s:-}" ] && MISS+=("$s"); done
+          if [ ${#MISS[@]} -gt 0 ]; then echo "[fatal] Missing secrets: ${MISS[*]}" >&2; exit 1; fi
+          echo "[init] Secrets OK"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Build local code manifest (repo HEAD)
+        id: local_manifest
+        run: |
+          chmod +x scripts/build_code_manifest.sh || true
+          OUT=$(bash scripts/build_code_manifest.sh)
+          echo "$OUT" | sed 's/^/[local-manifest]/'
+          while IFS= read -r line; do case "$line" in CODE_MANIFEST_HASH=*|PLUGIN_HASHES_JSON=*|THEME_HASHES_JSON=*) echo "$line" >> $GITHUB_ENV;; esac; done <<< "$OUT"
+
+      - name: Fetch remote deployment marker
+        id: remote_marker
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+        run: |
+          set -e
+          MARKER_PATH="$HOSTINGER_PATH/.deploy-info.json"
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s '$MARKER_PATH'" 2>/dev/null; then
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat '$MARKER_PATH'" > remote-deploy-info.json
+            echo "REMOTE_MARKER_PRESENT=true" >> $GITHUB_ENV
+            head -c 300 remote-deploy-info.json | sed 's/^/[remote-marker]/'
+          else
+            echo "[warn] Remote marker missing at $MARKER_PATH" >&2
+            echo "REMOTE_MARKER_PRESENT=false" >> $GITHUB_ENV
+          fi
+
+      - name: Parse remote marker fields
+        if: env.REMOTE_MARKER_PRESENT == 'true'
+        run: |
+          set +e
+          # Prefer jq if available
+          if command -v jq >/dev/null 2>&1; then
+            R_COMMIT=$(jq -r '.commit // empty' remote-deploy-info.json)
+            R_CODE_HASH=$(jq -r '.code_manifest_hash // empty' remote-deploy-info.json)
+          else
+            R_COMMIT=$(grep -o '"commit":"[0-9a-f]\{40\}"' remote-deploy-info.json | head -n1 | cut -d'"' -f4)
+            R_CODE_HASH=$(grep -o '"code_manifest_hash":"[0-9a-f]\{32,64\}"' remote-deploy-info.json | head -n1 | cut -d'"' -f4)
+          fi
+          echo "REMOTE_COMMIT=$R_COMMIT" >> $GITHUB_ENV
+          echo "REMOTE_CODE_MANIFEST_HASH=$R_CODE_HASH" >> $GITHUB_ENV
+          echo "[parse] Remote commit=$R_COMMIT code_manifest_hash=${R_CODE_HASH:0:16}"
+          set -e
+
+      - name: Compute local vs remote drift
+        id: drift
+        run: |
+          LOCAL_HASH=${CODE_MANIFEST_HASH:-}
+          REMOTE_HASH=${REMOTE_CODE_MANIFEST_HASH:-}
+          DRIFT="none"
+          if [ -z "$REMOTE_HASH" ]; then
+            DRIFT="unknown"; echo "[drift] Remote code_manifest_hash missing";
+          elif [ -z "$LOCAL_HASH" ]; then
+            DRIFT="unknown"; echo "[drift] Local code manifest missing";
+          elif [ "$LOCAL_HASH" != "$REMOTE_HASH" ]; then
+            DRIFT="hash_mismatch"; echo "[drift] Manifest hash mismatch local=${LOCAL_HASH:0:16} remote=${REMOTE_HASH:0:16}";
+          else
+            echo "[drift] Manifest hash matches (${LOCAL_HASH:0:16})";
+          fi
+          # Compare commit to repository HEAD
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [ -n "$REMOTE_COMMIT" ] && [ "$REMOTE_COMMIT" != "$HEAD_SHA" ]; then
+            DRIFT_COMMIT="remote_commit_differs"
+            echo "[drift] Remote commit ($REMOTE_COMMIT) differs from HEAD ($HEAD_SHA)";
+          else
+            DRIFT_COMMIT="commit_ok"
+          fi
+          echo "DRIFT_STATUS=$DRIFT" >> $GITHUB_ENV
+          echo "DRIFT_COMMIT_STATUS=$DRIFT_COMMIT" >> $GITHUB_ENV
+          printf 'drift_status=%s\ncommit_status=%s\nlocal_manifest_hash=%s\nremote_manifest_hash=%s\nremote_commit=%s\nhead_commit=%s\n' \
+            "$DRIFT" "$DRIFT_COMMIT" "${LOCAL_HASH}" "${REMOTE_HASH}" "${REMOTE_COMMIT:-}" "$HEAD_SHA" > drift-report.txt
+          cat drift-report.txt | sed 's/^/[drift-report]/'
+          if [ "$DRIFT" = "hash_mismatch" ] || [ "$DRIFT_COMMIT" = "remote_commit_differs" ]; then
+            echo "DRIFT_DETECTED=true" >> $GITHUB_ENV
+          else
+            echo "DRIFT_DETECTED=false" >> $GITHUB_ENV
+          fi
+
+      - name: Upload drift report
+        uses: actions/upload-artifact@v4
+        with:
+          name: drift-report
+          path: |
+            drift-report.txt
+            remote-deploy-info.json
+          if-no-files-found: warn
+          retention-days: 5
+
+      - name: Open or update drift issue
+        if: env.DRIFT_DETECTED == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const core = require('@actions/core');
+            const fs = require('fs');
+            const {owner, repo} = context.repo;
+            const title = 'Production drift detected';
+            const body = fs.readFileSync('drift-report.txt','utf8');
+            const issues = await github.paginate(github.rest.issues.listForRepo, {owner, repo, state: 'open', labels: 'drift'});
+            let existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({owner, repo, issue_number: existing.number, body: 'Updated drift report:\n\n' + body});
+              core.info(`Updated existing drift issue #${existing.number}`);
+            } else {
+              const created = await github.rest.issues.create({owner, repo, title, body: body + '\n\n(label: drift)', labels: ['drift']});
+              core.info(`Created drift issue #${created.number}`);
+            }
+
+      - name: Fail on drift (optional)
+        if: env.DRIFT_DETECTED == 'true' && github.event.inputs.fail_on_drift == 'true'
+        run: |
+          echo "[drift] Failing job due to detected drift (fail_on_drift=true)" >&2
+          exit 1
+
+      - name: Final summary
+        if: always()
+        run: |
+          echo "drift.status=${DRIFT_STATUS:-n/a} commit.status=${DRIFT_COMMIT_STATUS:-n/a} drift.detected=${DRIFT_DETECTED:-false}"

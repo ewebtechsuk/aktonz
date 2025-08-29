@@ -504,16 +504,18 @@ jobs:
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
           echo "[ls-aggressive] Starting aggressive neutralization phase"
-          # 1. Replace any LiteSpeed object-cache drop-in with inert core cache loader
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'OC="$HOSTINGER_PATH/wp-content/object-cache.php"; if [ -f "$OC" ] && grep -qi litespeed "$OC"; then cp "$OC" "$OC.ci.bak.$(date +%s)"; printf "<?php\\n// Inert object-cache stub inserted by CI\\nrequire_once ABSPATH . WPINC . "/cache.php";" > "$OC" && echo "[ls-aggressive][object-cache] Replaced LiteSpeed object-cache.php with inert stub"; else echo "[ls-aggressive][object-cache] No LiteSpeed signature present or file missing"; fi' || true
+          # Capture sanitized path locally to embed into remote scripts (prevents empty $HOSTINGER_PATH on remote)
+          HP="$HOSTINGER_PATH"
+          # 1. Replace any LiteSpeed object-cache drop-in with inert core cache loader (proper quoting)
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "OC=\"$HP/wp-content/object-cache.php\"; if [ -f \"$HP/wp-content/object-cache.php\" ] && grep -qi litespeed \"$HP/wp-content/object-cache.php\"; then cp \"$HP/wp-content/object-cache.php\" \"$HP/wp-content/object-cache.php.ci.bak.$(date +%s)\"; { printf '%s\\n' '<?php' '// Inert object-cache stub inserted by CI' 'require_once ABSPATH . WPINC . "/cache.php";' ; } > \"$HP/wp-content/object-cache.php\"; echo '[ls-aggressive][object-cache] Replaced LiteSpeed object-cache.php with inert stub'; else echo '[ls-aggressive][object-cache] No LiteSpeed signature present or file missing'; fi" || true
           # 2. Delete all disabled litespeed-cache variant directories to prevent autoloading old compiled code
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'PLUGDIR="$HOSTINGER_PATH/wp-content/plugins"; if [ -d "$PLUGDIR" ]; then cd "$PLUGDIR"; for d in litespeed-cache.disabled* _off_litespeed-cache; do [ -d "$d" ] && echo "[ls-aggressive][purge] Removing $d" && rm -rf -- "$d"; done; fi' || true
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "PLUGDIR=\"$HP/wp-content/plugins\"; if [ -d \"$HP/wp-content/plugins\" ]; then cd \"$HP/wp-content/plugins\"; for d in litespeed-cache.disabled* _off_litespeed-cache; do [ -d \"$d\" ] && echo '[ls-aggressive][purge] Removing' \"$d\" && rm -rf -- \"$d\"; done; fi" || true
           # 3. Ensure primary litespeed-cache directory is a minimal stub (not real code)
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'STUB="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"; MAIN="$STUB/litespeed-cache.php"; if [ -d "$STUB" ]; then if grep -q optimizer.cls.php -R "$STUB" 2>/dev/null; then echo "[ls-aggressive][warn] Real LiteSpeed code remnants found; purging"; rm -rf -- "$STUB"; fi; fi; if [ ! -d "$STUB" ]; then mkdir -p "$STUB"; printf "<?php\\n/* CI LiteSpeed Stub */\\nif(!defined(\"LITESPEED_DISABLE_ALL\"))define(\"LITESPEED_DISABLE_ALL\",true);return;" > "$MAIN"; echo "[ls-aggressive][stub] Stub plugin created"; else echo "[ls-aggressive][stub] Directory exists (assumed stub)"; fi' || true
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "STUB=\"$HP/wp-content/plugins/litespeed-cache\"; MAIN=\"$HP/wp-content/plugins/litespeed-cache/litespeed-cache.php\"; if [ -d \"$HP/wp-content/plugins/litespeed-cache\" ]; then if grep -q optimizer.cls.php -R \"$HP/wp-content/plugins/litespeed-cache\" 2>/dev/null; then echo '[ls-aggressive][warn] Real LiteSpeed code remnants found; purging'; rm -rf -- \"$HP/wp-content/plugins/litespeed-cache\"; fi; fi; if [ ! -d \"$HP/wp-content/plugins/litespeed-cache\" ]; then mkdir -p \"$HP/wp-content/plugins/litespeed-cache\"; { printf '%s\\n' '<?php' '/* CI LiteSpeed Stub */' 'if(!defined("LITESPEED_DISABLE_ALL"))define("LITESPEED_DISABLE_ALL",true);return;'; } > \"$HP/wp-content/plugins/litespeed-cache/litespeed-cache.php\"; echo '[ls-aggressive][stub] Stub plugin created'; else echo '[ls-aggressive][stub] Directory exists (assumed stub)'; fi" || true
           # 4. OPcache reset via ephemeral PHP script (best-effort)
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'PHP_BIN="php"; if command -v "$PHP_BIN" >/dev/null 2>&1; then echo "<?php opcache_reset(); echo \"OPCACHE_RESET_OK\n\";" > "$HOSTINGER_PATH/opcache_reset_ci.php"; OUT=$($PHP_BIN "$HOSTINGER_PATH/opcache_reset_ci.php" 2>&1 || true); echo "[ls-aggressive][opcache] $OUT"; rm -f "$HOSTINGER_PATH/opcache_reset_ci.php" || true; else echo "[ls-aggressive][opcache] php binary not available"; fi' || true
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "PHP_BIN=php; if command -v php >/dev/null 2>&1; then echo '<?php opcache_reset(); echo "OPCACHE_RESET_OK\\n";' > \"$HP/opcache_reset_ci.php\"; OUT=$(php \"$HP/opcache_reset_ci.php\" 2>&1 || true); echo '[ls-aggressive][opcache]' \"$OUT\"; rm -f \"$HP/opcache_reset_ci.php\" || true; else echo '[ls-aggressive][opcache] php binary not available'; fi" || true
           # 5. Deep search for any remaining optimizer file
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'find "$HOSTINGER_PATH/wp-content" -maxdepth 5 -type f -name optimizer.cls.php 2>/dev/null | sed "s#^#[ls-aggressive][residual] #" || true' || true
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find \"$HP/wp-content\" -maxdepth 5 -type f -name optimizer.cls.php 2>/dev/null | sed 's#^#[ls-aggressive][residual] #' || true" || true
           echo "[ls-aggressive] Completed aggressive neutralization phase"
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
@@ -643,6 +645,30 @@ jobs:
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Build code manifest (plugins/themes hashes)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        id: code_manifest
+        run: |
+          chmod +x scripts/build_code_manifest.sh || true
+          OUT=$(bash scripts/build_code_manifest.sh)
+          echo "$OUT" | sed 's/^/[code-manifest]/'
+          # Export each line KEY=VALUE
+          while IFS= read -r line; do
+            case "$line" in
+              CODE_MANIFEST_HASH=*|PLUGIN_HASHES_JSON=*|THEME_HASHES_JSON=*) echo "$line" >> $GITHUB_ENV;;
+            esac
+          done <<< "$OUT"
+          [ -f code-manifest.json ] && echo "CODE_MANIFEST_FILE=code-manifest.json" >> $GITHUB_ENV || true
+
+      - name: Upload code manifest artifact
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-manifest
+          path: code-manifest.json
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Post-rsync LiteSpeed purge & stub (prevent optimizer fatals)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
@@ -997,8 +1023,11 @@ jobs:
           AD_SIZE=${ADMIN_SIZE:-0}
           if [ -n "$CFG_RECOVER_SRC_SAFE" ]; then RECOVER_SRC_JSON="\"$CFG_RECOVER_SRC_SAFE\""; else RECOVER_SRC_JSON="null"; fi
           DISABLED_COUNT=$(echo "$DISABLED_PLUGINS_JSON" | grep -o '"' | wc -l | awk '{print $1/2}')
-          JSON_CORE=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s' \
-            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS")
+          CM_HASH=${CODE_MANIFEST_HASH:-}
+          PLUG_JSON=${PLUGIN_HASHES_JSON:-[]}
+            THEME_JSON=${THEME_HASHES_JSON:-[]}
+          JSON_CORE=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s,"code_manifest_hash":"%s","plugin_hashes":%s,"theme_hashes":%s' \
+            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS" "$CM_HASH" "$PLUG_JSON" "$THEME_JSON")
           if [ -n "$HP_HASH" ]; then JSON_CORE+=$(printf ',"homepage_hash":"%s","homepage_size":%s' "$HP_HASH" "$HP_SIZE"); fi
           if [ -n "$AD_HASH" ]; then JSON_CORE+=$(printf ',"admin_hash":"%s","admin_size":%s' "$AD_HASH" "$AD_SIZE"); fi
           JSON="$JSON_CORE}"
@@ -1078,7 +1107,7 @@ jobs:
           MARKER_LOCAL=.deploy-info.json.final
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat '$HOSTINGER_PATH/.deploy-info.json' 2>/dev/null" > "$MARKER_LOCAL" || { echo "[validate][fatal] Unable to read remote marker"; exit 1; }
           head -c 400 "$MARKER_LOCAL" | sed 's/^/[validate][marker]/'
-          for key in commit deployed_at cfg_lines disabled_plugins litespeed_disabled_variants; do
+          for key in commit deployed_at cfg_lines disabled_plugins litespeed_disabled_variants code_manifest_hash plugin_hashes theme_hashes; do
             if ! grep -q "$key" "$MARKER_LOCAL"; then echo "[validate][fatal] Marker missing key: $key"; exit 1; fi
           done
           # Basic JSON validity (counts braces & quotes balance heuristic)

@@ -1,0 +1,4 @@
+M	.github/workflows/deploy.yml
+M	README.md
+A	scripts/smoke_check.sh
+A	wp-content/mu-plugins/ci-litespeed-neutralizer.php

@@ -1,0 +1,895 @@
+diff --git a/.github/workflows/deploy.yml b/.github/workflows/deploy.yml
+index 4de9709e..b9d4bf85 100644
+--- a/.github/workflows/deploy.yml
++++ b/.github/workflows/deploy.yml
+@@ -50,6 +50,25 @@ jobs:
+       - name: Checkout
+         uses: actions/checkout@v4
+ 
++      - name: Validate required secrets (fail-fast)
++        run: |
++          REQUIRED=(HOSTINGER_SSH_HOST HOSTINGER_SSH_USER HOSTINGER_SSH_PORT HOSTINGER_PATH HOSTINGER_SSH_KEY)
++          MISSING=()
++          for s in "${REQUIRED[@]}"; do
++            if [ -z "${!s:-}" ]; then MISSING+=("$s"); fi
++          done
++          if [ ${#MISSING[@]} -gt 0 ]; then
++            echo "[secrets][fatal] Missing required secrets: ${MISSING[*]}" >&2
++            exit 1
++          fi
++          echo "[secrets] All required base secrets present."
++        env:
++          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
++          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
++          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
++          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
++          HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
++
+       - name: Ensure jq installed
+         run: |
+           if command -v jq >/dev/null 2>&1; then
+@@ -265,6 +284,30 @@ jobs:
+           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+ 
++      - name: Force disable problematic plugins (safety net)
++        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
++        run: |
++          # Intentionally force-disable litespeed-cache (root cause of 500 via md5_file on missing tmp assets)
++          FORCE_LIST="litespeed-cache"
++          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
++          HOSTINGER_PATH="$CLEAN_PATH"
++          for p in $FORCE_LIST; do
++            SRC="$HOSTINGER_PATH/wp-content/plugins/$p"
++            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$SRC' ]"; then
++              TS=$(date +%s)
++              DST="$SRC.disabled.$TS"
++              echo "[force-disable] Renaming active $p -> $(basename "$DST")"
++              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mv '$SRC' '$DST'" || echo "[force-disable][warn] Failed to rename $p (permissions?)"
++            else
++              echo "[force-disable] $p not present (already disabled or absent)"
++            fi
++          done
++        env:
++          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
++          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
++          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
++          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
++
+       - name: Guard & (if needed) recover wp-config before sanitation
+         if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+         id: cfg_guard
+@@ -455,6 +498,29 @@ jobs:
+           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+ 
++      - name: Aggressive LiteSpeed neutralization & OPcache reset
++        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
++        run: |
++          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
++          HOSTINGER_PATH="$CLEAN_PATH"
++          echo "[ls-aggressive] Starting aggressive neutralization phase"
++          # 1. Replace any LiteSpeed object-cache drop-in with inert core cache loader
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'OC="$HOSTINGER_PATH/wp-content/object-cache.php"; if [ -f "$OC" ] && grep -qi litespeed "$OC"; then cp "$OC" "$OC.ci.bak.$(date +%s)"; printf "<?php\\n// Inert object-cache stub inserted by CI\\nrequire_once ABSPATH . WPINC . "/cache.php";" > "$OC" && echo "[ls-aggressive][object-cache] Replaced LiteSpeed object-cache.php with inert stub"; else echo "[ls-aggressive][object-cache] No LiteSpeed signature present or file missing"; fi' || true
++          # 2. Delete all disabled litespeed-cache variant directories to prevent autoloading old compiled code
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'PLUGDIR="$HOSTINGER_PATH/wp-content/plugins"; if [ -d "$PLUGDIR" ]; then cd "$PLUGDIR"; for d in litespeed-cache.disabled* _off_litespeed-cache; do [ -d "$d" ] && echo "[ls-aggressive][purge] Removing $d" && rm -rf -- "$d"; done; fi' || true
++          # 3. Ensure primary litespeed-cache directory is a minimal stub (not real code)
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'STUB="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"; MAIN="$STUB/litespeed-cache.php"; if [ -d "$STUB" ]; then if grep -q optimizer.cls.php -R "$STUB" 2>/dev/null; then echo "[ls-aggressive][warn] Real LiteSpeed code remnants found; purging"; rm -rf -- "$STUB"; fi; fi; if [ ! -d "$STUB" ]; then mkdir -p "$STUB"; printf "<?php\\n/* CI LiteSpeed Stub */\\nif(!defined(\"LITESPEED_DISABLE_ALL\"))define(\"LITESPEED_DISABLE_ALL\",true);return;" > "$MAIN"; echo "[ls-aggressive][stub] Stub plugin created"; else echo "[ls-aggressive][stub] Directory exists (assumed stub)"; fi' || true
++          # 4. OPcache reset via ephemeral PHP script (best-effort)
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'PHP_BIN="php"; if command -v "$PHP_BIN" >/dev/null 2>&1; then echo "<?php opcache_reset(); echo \"OPCACHE_RESET_OK\n\";" > "$HOSTINGER_PATH/opcache_reset_ci.php"; OUT=$($PHP_BIN "$HOSTINGER_PATH/opcache_reset_ci.php" 2>&1 || true); echo "[ls-aggressive][opcache] $OUT"; rm -f "$HOSTINGER_PATH/opcache_reset_ci.php" || true; else echo "[ls-aggressive][opcache] php binary not available"; fi' || true
++          # 5. Deep search for any remaining optimizer file
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'find "$HOSTINGER_PATH/wp-content" -maxdepth 5 -type f -name optimizer.cls.php 2>/dev/null | sed "s#^#[ls-aggressive][residual] #" || true' || true
++          echo "[ls-aggressive] Completed aggressive neutralization phase"
++        env:
++          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
++          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
++          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
++          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
++
+       - name: Stop after audit (audit-only)
+         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.audit == 'true' }}
+         run: |
+@@ -472,9 +538,10 @@ jobs:
+           fi
+           HOSTINGER_PATH="$CLEAN_PATH"
+           RSYNC_EXCLUDES=(
+-          ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/litespeed" "wp-content/uploads" "wp-content/upgrade" ".DS_Store" "**/.DS_Store"
++          ".git" ".github" ".devcontainer" "node_modules" "vendor" "*.log" "*.sql" "wp-config-local.php" "wp-content/cache" "wp-content/uploads" "wp-content/upgrade" ".DS_Store" "**/.DS_Store"
+             "wp-content/mu-plugins.disabled" "wp-content/plugins.disabled" "wp-content/plugins.off" "wp-content/themes.off"
+             "aktonz-local-copy" # local backup snapshot, never deploy
++            "wp-content/plugins/litespeed-cache" # exclude problematic LiteSpeed plugin entirely (neutralized)
+           )
+ 
+           # Exclude remote-only or dynamically generated directories that are not tracked in the repo but required in production.
+@@ -577,95 +644,149 @@ jobs:
+           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+ 
+-      - name: Optional - Run WP cache flush
+-        if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
++      - name: Post-rsync LiteSpeed purge & stub (prevent optimizer fatals)
++        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+         run: |
+-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cd $HOSTINGER_PATH && wp cache flush || true"
++          set -e
++          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
++          HOSTINGER_PATH="$CLEAN_PATH"
++          PLUG_DIR="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
++          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$PLUG_DIR' ]"; then
++            TS=$(date +%s)
++            echo "[litespeed-post] Active litespeed-cache directory found post-rsync; renaming to disabled variant (.disabled.$TS)"
++            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mv '$PLUG_DIR' '$PLUG_DIR.disabled.$TS'" || echo "[litespeed-post][warn] Rename failed"
++          else
++            echo "[litespeed-post] No active litespeed-cache directory (good)"
++          fi
++          ASSET_DIR="$HOSTINGER_PATH/wp-content/litespeed"
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p '$ASSET_DIR/css' '$ASSET_DIR/js' && chmod 755 '$ASSET_DIR' '$ASSET_DIR/css' '$ASSET_DIR/js'" || true
++          TMPFILE="lscache-readme.$$"
++          cat > "$TMPFILE" <<'EOF'
++          This directory is intentionally kept (empty) by CI to prevent LiteSpeed Cache optimizer fatals.
++          The plugin is disabled/renamed during deployment. Empty css/ and js/ subfolders satisfy any stray md5_file() probes.
++          EOF
++          scp -P "$HOSTINGER_SSH_PORT" "$TMPFILE" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$ASSET_DIR/README.ci.txt" 2>/dev/null || true
++          rm -f "$TMPFILE" || true
++          echo "[litespeed-post] Stubbed asset directory ensured."
++
++          # Create a benign stub litespeed-cache plugin directory if the real plugin is absent, to satisfy any hard-coded includes.
++          # This prevents server-level tooling from auto-restoring or attempting to load missing original code paths and throwing fatals.
++          STUB_MAIN="$PLUG_DIR/litespeed-cache.php"
++          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ ! -d '$PLUG_DIR' ]"; then
++            echo "[litespeed-post][stub] Creating benign litespeed-cache stub plugin (real plugin disabled)."
++            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p '$PLUG_DIR'" || true
++            # Build stub locally then copy to remote for clarity (avoids heredoc PHP tag confusing YAML linters)
++            {
++              printf '%s\n' '<?php'
++              printf '%s\n' '/*'
++              printf '%s\n' 'Plugin Name: LiteSpeed Cache (CI Stub)'
++              printf '%s\n' 'Description: Placeholder stub created by CI to neutralize real LiteSpeed plugin during troubleshooting. Safe to remove once issue resolved.'
++              printf '%s\n' 'Version: 0.0.0-ci-stub'
++              printf '%s\n' 'Author: CI Automation'
++              printf '%s\n' '*/'
++              printf '%s\n' "if ( ! defined('LITESPEED_DISABLE_ALL') ) define('LITESPEED_DISABLE_ALL', true);"
++              printf '%s\n' "if ( ! defined('LSCACHE_ADV_CACHE') ) define('LSCACHE_ADV_CACHE', false);"
++              printf '%s\n' '// Short-circuit early to avoid loading any real code.'
++              printf '%s\n' 'return; // CI stub ends execution.'
++            } > stub-lscache.php
++            scp -P "$HOSTINGER_SSH_PORT" stub-lscache.php "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$STUB_MAIN" 2>/dev/null || echo "[litespeed-post][stub][warn] Failed to upload stub main file"
++            rm -f stub-lscache.php || true
++            # Marker file for diagnostics
++            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo 'ci-stub-created $(date -u +%Y-%m-%dT%H:%M:%SZ)' > '$PLUG_DIR/.ci-litespeed-stub'" || true
++          else
++            # If directory exists after our earlier rename attempt, record its contents for debugging.
++            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-post][dir] /'" || true
++          fi
+         env:
+           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+-          RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
+ 
+-      - name: Record deployment marker
++      - name: Assert LiteSpeed optimizer absent (hard fail if real code persists)
+         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+         run: |
+-          echo "[deploy] Writing enriched .deploy-info.json marker with commit $GITHUB_SHA" 
+-          if [ -z "$HOSTINGER_PATH" ]; then echo "[error] HOSTINGER_PATH not set"; exit 1; fi
++          set -e
+           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+           HOSTINGER_PATH="$CLEAN_PATH"
+-          COMMIT="$GITHUB_SHA"
+-          SHORT="${SHORT_SHA:-${GITHUB_SHA::7}}"
+-          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+-          DISABLED_PLUGINS_JSON=${DISABLED_PLUGINS_JSON:-[]}
+-          CFG_LINES_SAFE=${CFG_LINES:-0}
+-          CFG_RECOVERED_SAFE=${CFG_RECOVERED:-false}
+-          CFG_RECOVER_SRC_SAFE="${CFG_RECOVER_SRC:-}"
+-          LSP_VARIANTS=${LITESPEED_DISABLED_VARIANTS:-0}
+-          if [ -n "$CFG_RECOVER_SRC_SAFE" ]; then RECOVER_SRC_JSON="\"$CFG_RECOVER_SRC_SAFE\""; else RECOVER_SRC_JSON="null"; fi
+-          DISABLED_COUNT=$(echo "$DISABLED_PLUGINS_JSON" | grep -o '"' | wc -l | awk '{print $1/2}')
+-          JSON=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s}' \
+-            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS")
+-          REMOTE_DIR="${HOSTINGER_PATH%/}"
+-          echo "[deploy] Marker JSON size: $(printf '%s' "$JSON" | wc -c) bytes"
+-          HASH=$(printf '%s' "$JSON" | sha256sum | awk '{print $1}')
+-          echo "[deploy] Marker sha256 $HASH"
+-          printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
+-            || { echo '[error] Failed to stream marker to remote'; exit 1; }
+-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 400 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
+-          # Retrieve full remote marker locally for artifact upload & historical diffing (with retries + scp fallback)
+-          RETR_OK=false
+-          for attempt in 1 2 3; do
+-            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat \"$REMOTE_DIR/.deploy-info.json\" 2>/dev/null" > .deploy-info.json.local.tmp 2>/dev/null || true
+-            if [ -s .deploy-info.json.local.tmp ]; then
+-              mv .deploy-info.json.local.tmp .deploy-info.json.local
+-              echo "[marker] Retrieved marker locally on attempt $attempt"
+-              RETR_OK=true
+-              break
+-            else
+-              echo "[marker][retry] Attempt $attempt failed to fetch marker; sleeping before retry"
+-              rm -f .deploy-info.json.local.tmp 2>/dev/null || true
+-              sleep 2
+-            fi
+-          done
+-          if [ "$RETR_OK" = false ]; then
+-            echo "[marker][warn] Direct SSH retrieval failed after retries; attempting scp fallback"
+-            scp -P "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_DIR/.deploy-info.json" .deploy-info.json.local 2>/dev/null || true
++          PLUG_DIR="$HOSTINGER_PATH/wp-content/plugins/litespeed-cache"
++          # If optimizer.cls.php exists we are still shipping real plugin code (should be excluded/renamed) -> fail fast.
++          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PLUG_DIR/src/optimizer.cls.php' ]"; then
++            echo "[litespeed-assert][fail] Real LiteSpeed optimizer code still present at $PLUG_DIR/src/optimizer.cls.php" >&2
++            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1R '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-assert][dir] /'" || true
++            exit 1
+           fi
+-          if [ -s .deploy-info.json.local ]; then
+-            echo "[marker] Local marker copy size: $(wc -c < .deploy-info.json.local) bytes"
++          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$PLUG_DIR' ]"; then
++            echo "[litespeed-assert] Directory exists (likely stub); listing for verification:" 
++            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-assert][stub] /'" || true
+           else
+-            echo '[marker][warn] Local marker unavailable after retries & fallback (artifact step will warn)'
++            echo "[litespeed-assert] No litespeed-cache directory present (expected after exclusion)"
+           fi
+-          echo "MARKER_SHA256=$HASH" >> $GITHUB_ENV
+-          echo "[deploy] Exported MARKER_SHA256 env=$HASH"
++          echo "[litespeed-assert] Passed: no optimizer.cls.php detected."
+         env:
+           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+ 
+-      - name: Upload deployment marker
+-        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: deploy-marker
+-          path: .deploy-info.json.local
+-          include-hidden-files: true
+-          if-no-files-found: warn
+-          retention-days: 14
+ 
+-      - name: Verify marker artifact presence
+-        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
++      - name: Extract previous marker metrics (hashes & sizes)
++        if: ${{ (success() || failure()) && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+         run: |
+-          if [ -f .deploy-info.json.local ]; then
+-            echo "[marker-check] Local marker present: $(wc -c < .deploy-info.json.local) bytes"
+-            head -c 180 .deploy-info.json.local | sed 's/^/[marker-check][head]/'
++          # Allow tolerant parsing (do not fail whole job if marker JSON malformed)
++          set +e
++          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
++          HOSTINGER_PATH="$CLEAN_PATH"
++          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s '$HOSTINGER_PATH/.deploy-info.json'" 2>/dev/null; then
++            CONTENT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat '$HOSTINGER_PATH/.deploy-info.json'" || true)
++            echo "$CONTENT" | head -c 200 | sed 's/^/[prev-marker]/'
++            if command -v jq >/dev/null 2>&1; then
++              HPREV_HASH=$(printf '%s' "$CONTENT" | jq -r '.homepage_hash // empty' 2>/dev/null)
++              JQ_RC=$?
++              APREV_HASH=$(printf '%s' "$CONTENT" | jq -r '.admin_hash // empty' 2>/dev/null)
++              HPREV_SIZE=$(printf '%s' "$CONTENT" | jq -r '.homepage_size // empty' 2>/dev/null)
++              APREV_SIZE=$(printf '%s' "$CONTENT" | jq -r '.admin_size // empty' 2>/dev/null)
++              if [ $JQ_RC -ne 0 ]; then
++                echo "[prev-marker][warn] jq parse failed (rc=$JQ_RC); falling back to regex extraction"
++                HPREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"homepage_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
++                APREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"admin_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
++                HPREV_SIZE=$(printf '%s' "$CONTENT" | grep -o '"homepage_size":[0-9]*' | head -n1 | cut -d: -f2 || true)
++                APREV_SIZE=$(printf '%s' "$CONTENT" | grep -o '"admin_size":[0-9]*' | head -n1 | cut -d: -f2 || true)
++              fi
++            else
++              HPREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"homepage_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
++              APREV_HASH=$(printf '%s' "$CONTENT" | grep -o '"admin_hash":"[a-f0-9]\{16,64\}"' | head -n1 | cut -d'"' -f4 || true)
++              HPREV_SIZE=$(printf '%s' "$CONTENT" | grep -o '"homepage_size":[0-9]*' | head -n1 | cut -d: -f2 || true)
++              APREV_SIZE=$(printf '%s' "$CONTENT" | grep -o '"admin_size":[0-9]*' | head -n1 | cut -d: -f2 || true)
++            fi
++            [ -n "$HPREV_HASH" ] && echo "PREV_HOMEPAGE_HASH=$HPREV_HASH" >> $GITHUB_ENV
++            [ -n "$APREV_HASH" ] && echo "PREV_ADMIN_HASH=$APREV_HASH" >> $GITHUB_ENV
++            [ -n "$HPREV_SIZE" ] && echo "PREV_HOMEPAGE_SIZE=$HPREV_SIZE" >> $GITHUB_ENV
++            [ -n "$APREV_SIZE" ] && echo "PREV_ADMIN_SIZE=$APREV_SIZE" >> $GITHUB_ENV
+           else
+-            echo "[marker-check][warn] .deploy-info.json.local missing after upload attempt; creating placeholder to avoid downstream confusion"
+-            echo '{}' > .deploy-info.json.local
++            echo "[prev-marker] No existing marker (first run or missing)."
+           fi
++          # Re-enable errexit for any subsequent composite commands (defensive; though step ends here)
++          set -e
++        env:
++          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
++          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
++          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
++          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
++
++      - name: Optional - Run WP cache flush
++        if: ${{ success() && env.RUN_WP_CLI_CACHE_FLUSH == 'true' && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
++        run: |
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cd $HOSTINGER_PATH && wp cache flush || true"
++        env:
++          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
++          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
++          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
++          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
++          RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
++
++
++  # Removed premature marker artifact upload; marker is only created after smoke tests now.
+ 
+       - name: Toggle WP_DEBUG (optional)
+         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.toggle_debug != 'none' && github.event.inputs.toggle_debug != '' }}
+@@ -827,46 +948,97 @@ jobs:
+           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+ 
+-      - name: Homepage smoke test (always)
++      - name: Smoke tests (homepage + admin)
+         if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
+         run: |
+-          URL="${PRODUCTION_URL%/}/"
+-          echo "[smoke] Curling homepage: $URL"
+-          # Capture status, total time, size, final URL, redirects (avoid heredoc for YAML safety)
+-          CURL_METRICS=$(curl -s -o body.html -w '%{http_code} %{time_total} %{size_download} %{url_effective} %{num_redirects}' "$URL" || echo "000 0 0 - 0")
+-          read -r HTTP_CODE TIME_TOTAL SIZE_DL URL_EFF N_REDIRECTS <<< "$CURL_METRICS"
+-          TIME_MS=$(awk -v t="$TIME_TOTAL" 'BEGIN{printf "%.0f", t*1000}')
+-          echo "[smoke] Status: $HTTP_CODE time=${TIME_MS}ms redirects=$N_REDIRECTS size=${SIZE_DL}B url=$URL_EFF"
+-          head -n 60 body.html | sed 's/^/[smoke][body]/'
+-          if [ "$HTTP_CODE" -ge 500 ]; then echo "[smoke] FAIL: HTTP $HTTP_CODE"; exit 1; fi
+-          if grep -qi 'critical error' body.html; then echo "[smoke] FAIL: Detected WordPress critical error banner"; exit 1; fi
+-          echo "HOMEPAGE_STATUS=$HTTP_CODE" >> $GITHUB_ENV
+-          echo "HOMEPAGE_TIME_MS=$TIME_MS" >> $GITHUB_ENV
+-          echo "HOMEPAGE_REDIRECTS=$N_REDIRECTS" >> $GITHUB_ENV
+-          echo "[smoke] PASS"
++          chmod +x scripts/smoke_check.sh || true
++          scripts/smoke_check.sh "$PRODUCTION_URL"
+         env:
+           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
++          SMOKE_ALLOW_FAILURE: ${{ secrets.SMOKE_ALLOW_FAILURE || 'false' }}
++          SMOKE_NONBLOCKING: ${{ secrets.SMOKE_NONBLOCKING || 'false' }}
++          SMOKE_MAX_HOME_MS: ${{ secrets.SMOKE_MAX_HOME_MS }}
++          SMOKE_MAX_ADMIN_MS: ${{ secrets.SMOKE_MAX_ADMIN_MS }}
++          SMOKE_MAX_REDIRECTS: ${{ secrets.SMOKE_MAX_REDIRECTS }}
++          SMOKE_MAX_SIZE_DELTA_PCT: ${{ secrets.SMOKE_MAX_SIZE_DELTA_PCT }}
++          PREV_HOMEPAGE_HASH: ${{ env.PREV_HOMEPAGE_HASH }}
++          PREV_ADMIN_HASH: ${{ env.PREV_ADMIN_HASH }}
++          PREV_HOMEPAGE_SIZE: ${{ env.PREV_HOMEPAGE_SIZE }}
++          PREV_ADMIN_SIZE: ${{ env.PREV_ADMIN_SIZE }}
+ 
+-      - name: Admin smoke test
+-        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
++      - name: Upload smoke artifacts
++        if: ${{ always() && env.PRODUCTION_URL != '' }}
++        uses: actions/upload-artifact@v4
++        with:
++          name: smoke-artifacts
++          path: |
++            smoke_artifacts
++          if-no-files-found: ignore
++          retention-days: 5
++
++      - name: Record deployment marker (post-smoke)
++        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+         run: |
+-          BASE="${PRODUCTION_URL%/}"
+-          ADMIN_URL="$BASE/wp-admin/"
+-          echo "[smoke-admin] Curling: $ADMIN_URL"
+-          # Follow redirects to capture final status/content
+-          CURL_ADMIN=$(curl -s -L -o admin.html -w '%{http_code} %{time_total} %{size_download} %{url_effective} %{num_redirects}' "$ADMIN_URL" || echo "000 0 0 - 0")
+-          read -r ADMIN_CODE ADMIN_TIME ADMIN_SIZE ADMIN_URL_EFF ADMIN_REDIRECTS <<< "$CURL_ADMIN"
+-          ADMIN_TIME_MS=$(awk -v t="$ADMIN_TIME" 'BEGIN{printf "%.0f", t*1000}')
+-          echo "[smoke-admin] HTTP $ADMIN_CODE time=${ADMIN_TIME_MS}ms redirects=$ADMIN_REDIRECTS size=${ADMIN_SIZE}B (expected 200 or redirect to login)"
+-          head -n 40 admin.html | sed 's/^/[smoke-admin][body]/'
+-          if [ "$ADMIN_CODE" -ge 500 ]; then echo "[smoke-admin] FAIL: $ADMIN_CODE"; exit 1; fi
+-          if grep -qi 'critical error' admin.html; then echo "[smoke-admin] FAIL: Detected WordPress critical error banner"; exit 1; fi
+-          echo "ADMIN_STATUS=$ADMIN_CODE" >> $GITHUB_ENV
+-          echo "ADMIN_TIME_MS=$ADMIN_TIME_MS" >> $GITHUB_ENV
+-          echo "ADMIN_REDIRECTS=$ADMIN_REDIRECTS" >> $GITHUB_ENV
+-          echo "[smoke-admin] PASS"
++          echo "[deploy] Writing enriched .deploy-info.json marker with commit $GITHUB_SHA (includes smoke hashes)" 
++          if [ -z "$HOSTINGER_PATH" ]; then echo "[error] HOSTINGER_PATH not set"; exit 1; fi
++          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
++          HOSTINGER_PATH="$CLEAN_PATH"
++          COMMIT="$GITHUB_SHA"
++          SHORT="${SHORT_SHA:-${GITHUB_SHA::7}}"
++          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
++          DISABLED_PLUGINS_JSON=${DISABLED_PLUGINS_JSON:-[]}
++          CFG_LINES_SAFE=${CFG_LINES:-0}
++          CFG_RECOVERED_SAFE=${CFG_RECOVERED:-false}
++          CFG_RECOVER_SRC_SAFE="${CFG_RECOVER_SRC:-}"
++          LSP_VARIANTS=${LITESPEED_DISABLED_VARIANTS:-0}
++          HP_HASH=${HOMEPAGE_HASH:-}
++          AD_HASH=${ADMIN_HASH:-}
++          HP_SIZE=${HOMEPAGE_SIZE:-0}
++          AD_SIZE=${ADMIN_SIZE:-0}
++          if [ -n "$CFG_RECOVER_SRC_SAFE" ]; then RECOVER_SRC_JSON="\"$CFG_RECOVER_SRC_SAFE\""; else RECOVER_SRC_JSON="null"; fi
++          DISABLED_COUNT=$(echo "$DISABLED_PLUGINS_JSON" | grep -o '"' | wc -l | awk '{print $1/2}')
++          JSON_CORE=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s' \
++            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS")
++          if [ -n "$HP_HASH" ]; then JSON_CORE+=$(printf ',"homepage_hash":"%s","homepage_size":%s' "$HP_HASH" "$HP_SIZE"); fi
++          if [ -n "$AD_HASH" ]; then JSON_CORE+=$(printf ',"admin_hash":"%s","admin_size":%s' "$AD_HASH" "$AD_SIZE"); fi
++          JSON="$JSON_CORE}"
++          REMOTE_DIR="${HOSTINGER_PATH%/}"
++          echo "[deploy] Marker JSON size: $(printf '%s' "$JSON" | wc -c) bytes"
++          HASH=$(printf '%s' "$JSON" | sha256sum | awk '{print $1}')
++          echo "[deploy] Marker sha256 $HASH"
++          printf '%s' "$JSON" | ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p \"$REMOTE_DIR\" && cat > \"$REMOTE_DIR/.deploy-info.json\"" \
++            || { echo '[error] Failed to stream marker to remote'; exit 1; }
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -s \"$REMOTE_DIR/.deploy-info.json\" && head -c 300 \"$REMOTE_DIR/.deploy-info.json\"" | sed 's/^/[marker]/' || { echo '[error] Remote marker verification failed'; exit 1; }
++          RETR_OK=false
++          for attempt in 1 2 3; do
++            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat \"$REMOTE_DIR/.deploy-info.json\" 2>/dev/null" > .deploy-info.json.local.tmp 2>/dev/null || true
++            if [ -s .deploy-info.json.local.tmp ]; then
++              mv .deploy-info.json.local.tmp .deploy-info.json.local
++              echo "[marker] Retrieved marker locally on attempt $attempt"; RETR_OK=true; break
++            else
++              echo "[marker][retry] Attempt $attempt failed; sleeping"; rm -f .deploy-info.json.local.tmp 2>/dev/null || true; sleep 2
++            fi
++          done
++          if [ "$RETR_OK" = false ]; then
++            echo "[marker][warn] Fallback scp copy attempt"; scp -P "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_DIR/.deploy-info.json" .deploy-info.json.local 2>/dev/null || true; fi
++          if [ -s .deploy-info.json.local ]; then echo "[marker] Local marker copy size: $(wc -c < .deploy-info.json.local) bytes"; else echo '[marker][warn] Local copy unavailable'; fi
++          echo "MARKER_SHA256=$HASH" >> $GITHUB_ENV
++          echo "[deploy] Exported MARKER_SHA256 env=$HASH"
+         env:
+-          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
++          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
++          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
++          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
++          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
++
++      - name: Upload deployment marker artifact (post-creation)
++        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
++        uses: actions/upload-artifact@v4
++        with:
++          name: deploy-marker
++          path: .deploy-info.json.local
++          include-hidden-files: true
++          if-no-files-found: warn
++          retention-days: 14
+ 
+       - name: Post-run validation & integrity assertions
+         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+@@ -954,6 +1126,65 @@ jobs:
+           if-no-files-found: error
+           retention-days: 7
+ 
++      - name: On-failure diagnostics (tail logs & deep probe)
++        if: ${{ failure() }}
++        run: |
++          echo "[diag] Job has failures; collecting diagnostics." >&2
++          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
++          HOSTINGER_PATH="$CLEAN_PATH"
++          MU_DIR="$HOSTINGER_PATH/wp-content/mu-plugins"
++          TEMP_MU="$MU_DIR/zzz-ci-temp-debug.php"
++          echo "[diag] Ensuring mu-plugins directory for temporary debug snippet" >&2
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p '$MU_DIR'" || true
++          echo "[diag] Injecting temporary mu-plugin to force WP_DEBUG & WP_DEBUG_LOG (if possible)" >&2
++          echo "[diag] Building temporary mu-plugin file locally" >&2
++          {
++            printf '%s\n' '<?php'
++            printf '%s\n' '/**'
++            printf '%s\n' ' * Temporary CI debug mu-plugin (auto-created on failure, removed after diagnostics).'
++            printf '%s\n' ' */'
++            printf '%s\n' "if (!defined('WP_DEBUG')) { define('WP_DEBUG', true); }"
++            printf '%s\n' "if (!defined('WP_DEBUG_LOG')) { define('WP_DEBUG_LOG', true); }"
++            printf '%s\n' "if (!defined('WP_DEBUG_DISPLAY')) { define('WP_DEBUG_DISPLAY', false); }"
++            printf '%s\n' "if (!function_exists('__ci_temp_debug_marker')) {"
++            printf '%s\n' '  function __ci_temp_debug_marker() { return true; }'
++            printf '%s\n' "  error_log('[ci-temp-debug] mu-plugin loaded at ' . date('c'));"
++            printf '%s\n' '}'
++          } > ci-temp-mu.php
++          scp -P "$HOSTINGER_SSH_PORT" ci-temp-mu.php "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$TEMP_MU" 2>/dev/null || echo "[diag][warn] Failed to copy mu-plugin" >&2
++          rm -f ci-temp-mu.php || true
++          # Small delay to allow PHP opcode cache (if any) to notice new file
++          sleep 2
++          echo "[diag] Probing endpoints" >&2
++          for ep in "/" "/wp-admin/" "/wp-json/" "/?rest_route=/"; do
++            URL="${PRODUCTION_URL%/}$ep"
++            echo "[diag] Curling $URL" >&2
++            curl -s -S -D diag_headers$(echo "$ep" | tr '/?' '_').txt -o diag_body$(echo "$ep" | tr '/?' '_').html -w '\n[diag] http_code=%{http_code} time_total=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n' "$URL" || echo "[diag][warn] curl failed for $ep" >&2
++            head -n 80 diag_body$(echo "$ep" | tr '/?' '_').html | sed "s/^/[diag][body$(echo "$ep" | tr '/?' '_')]/" || true
++          done
++          echo "[diag] Tailing logs" >&2
++          for logf in debug.log php-error.log error_log; do
++            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$logf' ]"; then
++              echo "[diag] Tail of $logf" >&2
++              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$logf'" | sed "s/^/[diag][log:$logf]/"
++            fi
++          done
++          echo "[diag] Grepping fatal patterns" >&2
++          for logf in debug.log php-error.log error_log; do
++            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$logf' ]"; then
++              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 300 '$HOSTINGER_PATH/wp-content/$logf'" | grep -Ei 'fatal|error' | head -n 60 | sed "s/^/[diag][grep:$logf]/" || true
++            fi
++          done
++          echo "[diag] Removing temporary mu-plugin" >&2
++          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "rm -f '$TEMP_MU'" || true
++          echo "[diag] Done diagnostics." >&2
++        env:
++          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
++          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
++          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
++          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
++          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
++
+       - name: Final status summary
+         if: ${{ always() }}
+         run: |
+@@ -968,6 +1199,17 @@ jobs:
+           if [ -n "${{ env.ADMIN_STATUS }}" ]; then echo "summary.admin.status=${{ env.ADMIN_STATUS }}"; fi
+           if [ -n "${{ env.ADMIN_TIME_MS }}" ]; then echo "summary.admin.time_ms=${{ env.ADMIN_TIME_MS }}"; fi
+           if [ -n "${{ env.ADMIN_REDIRECTS }}" ]; then echo "summary.admin.redirects=${{ env.ADMIN_REDIRECTS }}"; fi
++          if [ -n "${{ env.HOMEPAGE_THRESHOLD_FAIL }}" ]; then echo "summary.home.threshold_fail=${{ env.HOMEPAGE_THRESHOLD_FAIL }}"; fi
++          if [ -n "${{ env.ADMIN_THRESHOLD_FAIL }}" ]; then echo "summary.admin.threshold_fail=${{ env.ADMIN_THRESHOLD_FAIL }}"; fi
++          if [ -n "${{ env.HOMEPAGE_HASH }}" ]; then echo "summary.home.hash_prefix=${{ env.HOMEPAGE_HASH }}" | cut -c1-16; fi
++          if [ -n "${{ env.ADMIN_HASH }}" ]; then echo "summary.admin.hash_prefix=${{ env.ADMIN_HASH }}" | cut -c1-16; fi
++          if [ -n "${{ env.HOMEPAGE_SIZE }}" ]; then echo "summary.home.size=${{ env.HOMEPAGE_SIZE }}"; fi
++          if [ -n "${{ env.ADMIN_SIZE }}" ]; then echo "summary.admin.size=${{ env.ADMIN_SIZE }}"; fi
++          if [ -n "${{ env.HOMEPAGE_SIZE_DELTA_PCT }}" ]; then echo "summary.home.size_delta_pct=${{ env.HOMEPAGE_SIZE_DELTA_PCT }}"; fi
++          if [ -n "${{ env.ADMIN_SIZE_DELTA_PCT }}" ]; then echo "summary.admin.size_delta_pct=${{ env.ADMIN_SIZE_DELTA_PCT }}"; fi
++          if [ -n "${{ env.HOMEPAGE_REASON }}" ]; then echo "summary.home.reason=${{ env.HOMEPAGE_REASON }}"; fi
++          if [ -n "${{ env.ADMIN_REASON }}" ]; then echo "summary.admin.reason=${{ env.ADMIN_REASON }}"; fi
++          if [ -n "${{ env.SMOKE_OVERALL_STATUS }}" ]; then echo "summary.smoke.overall=${{ env.SMOKE_OVERALL_STATUS }}"; fi
+           if [ -f validation-summary.json ]; then
+             if command -v jq >/dev/null 2>&1; then
+               jq -r '"summary.config_lines=" + (.original_lines|tostring) + "/" + (.final_lines|tostring) + " summary.marker_size=" + (.marker_size|tostring) + " summary.marker_hash_prefix=" + (.marker_hash[0:16])' validation-summary.json || true
+diff --git a/README.md b/README.md
+index 8ac03541..1e238ab6 100644
+--- a/README.md
++++ b/README.md
+@@ -80,3 +80,4 @@ scripts/codex.sh hard-reset
+ ## License
+ See `license.txt` (WordPress) plus any additional project specific licensing notices.
+ 
++
+diff --git a/scripts/smoke_check.sh b/scripts/smoke_check.sh
+new file mode 100644
+index 00000000..3a08bce2
+--- /dev/null
++++ b/scripts/smoke_check.sh
+@@ -0,0 +1,196 @@
++#!/usr/bin/env bash
++# Enhanced smoke test (homepage + admin) with thresholds, hashing, size delta & artifact capture.
++# Usage: smoke_check.sh <base_url>
++# Config via env:
++#   SMOKE_ALLOW_FAILURE (default false)
++#   SMOKE_MAX_HOME_MS (e.g. 4000)
++#   SMOKE_MAX_ADMIN_MS (e.g. 5000)
++#   SMOKE_MAX_REDIRECTS (e.g. 4)
++#   SMOKE_ARTIFACT_DIR (default smoke_artifacts)
++#   SMOKE_MAX_SIZE_DELTA_PCT (integer percent, e.g. 60) triggers threshold fail if exceeded
++#   PREV_HOMEPAGE_HASH / PREV_ADMIN_HASH / PREV_HOMEPAGE_SIZE / PREV_ADMIN_SIZE provided by workflow (optional)
++# Robust mode: don't abort entire script on single check failure; we manage exit codes manually.
++set -Euo pipefail
++BASE_URL="${1:-${PRODUCTION_URL:-}}"
++ALLOW_FAILURE="${SMOKE_ALLOW_FAILURE:-false}"
++NONBLOCKING="${SMOKE_NONBLOCKING:-false}"
++MAX_HOME_MS="${SMOKE_MAX_HOME_MS:-0}"  # 0 means disabled
++MAX_ADMIN_MS="${SMOKE_MAX_ADMIN_MS:-0}"
++MAX_REDIRECTS="${SMOKE_MAX_REDIRECTS:-0}"
++MAX_SIZE_DELTA_PCT="${SMOKE_MAX_SIZE_DELTA_PCT:-0}"
++ART_DIR="${SMOKE_ARTIFACT_DIR:-smoke_artifacts}"
++if [ -z "$BASE_URL" ]; then
++  echo "[smoke] ERROR: Base URL not provided (arg1 or PRODUCTION_URL env)." >&2
++  exit 2
++fi
++BASE_URL="${BASE_URL%/}"
++CURL_BIN="curl"
++if ! command -v curl >/dev/null 2>&1; then
++  echo "[smoke] ERROR: curl not installed" >&2
++  exit 3
++fi
++mkdir -p "$ART_DIR" 2>/dev/null || true
++META_JSON="$ART_DIR/metrics.json"
++# We'll build JSON progressively in-memory to avoid brittle sed insertions when values contain special chars.
++JSON_ENTRIES=""
++
++# Append JSON helper (very small, manual since jq not guaranteed)
++append_json() {
++  # args: label code ms redirects size url_eff fail reason
++  local label="$1" code="$2" ms="$3" redirects="$4" size="$5" url_eff="$6" fail="$7" reason="$8"
++  local entry
++  entry=$(printf '{"label":"%s","code":%s,"time_ms":%s,"redirects":%s,"size":%s,"final_url":"%s","failed":%s,"reason":"%s"}' \
++    "$label" "$code" "$ms" "$redirects" "$size" "$url_eff" "$fail" "$reason")
++  JSON_ENTRIES+=",$entry"
++}
++
++threshold_violation() {
++  local label="$1" ms="$2" redirects="$3"
++  local reasons=()
++  if [ "$label" = HOME ] && [ "$MAX_HOME_MS" != 0 ] && [ "$ms" -gt "$MAX_HOME_MS" ]; then reasons+=("slow>${MAX_HOME_MS}ms"); fi
++  if [ "$label" = ADMIN ] && [ "$MAX_ADMIN_MS" != 0 ] && [ "$ms" -gt "$MAX_ADMIN_MS" ]; then reasons+=("slow>${MAX_ADMIN_MS}ms"); fi
++  if [ "$MAX_REDIRECTS" != 0 ] && [ "$redirects" -gt "$MAX_REDIRECTS" ]; then reasons+=("redirects>${MAX_REDIRECTS}"); fi
++  if [ ${#reasons[@]} -gt 0 ]; then
++    printf '%s' "${reasons[*]}"
++    return 0
++  fi
++  return 1
++}
++
++run_check() {
++  local path="$1"; shift
++  local label="$1"; shift
++  local url="$BASE_URL$path"
++  local body_file
++  body_file=$(mktemp)
++  local metrics
++  metrics=$($CURL_BIN -s -L -o "$body_file" -w '%{http_code} %{time_total} %{size_download} %{url_effective} %{num_redirects}' "$url" || echo "000 0 0 - 0")
++  read -r code t_total size url_eff redirects <<<"$metrics"
++  local ms
++  ms=$(awk -v t="$t_total" 'BEGIN{printf "%.0f", t*1000}')
++  echo "[$label] HTTP $code time=${ms}ms size=${size}B redirects=$redirects url=$url_eff"
++  head -n 50 "$body_file" | sed "s/^/[$label][body]/"
++  # Compute body hash & size (size already captured, but keep consistent)
++  local body_hash
++  if command -v sha256sum >/dev/null 2>&1; then
++    body_hash=$(sha256sum "$body_file" | awk '{print $1}')
++  else
++    body_hash="hash_unavailable"
++  fi
++  local fail=false reason=""
++  if [ "$code" -ge 500 ]; then fail=true; reason="http${code}"; fi
++  # "critical error" banner detection (non-fatal if not present)
++  if grep -qi 'critical error' "$body_file" 2>/dev/null; then fail=true; reason="${reason:+$reason,}critical"; fi
++  # Size delta vs previous (if provided)
++  local prev_size prev_hash delta_pct
++  case "$label" in
++    HOME) prev_size="${PREV_HOMEPAGE_SIZE:-}"; prev_hash="${PREV_HOMEPAGE_HASH:-}";;
++    ADMIN) prev_size="${PREV_ADMIN_SIZE:-}"; prev_hash="${PREV_ADMIN_HASH:-}";;
++  esac
++  if [ -n "$prev_size" ] && echo "$prev_size" | grep -Eq '^[0-9]+$' && [ "$prev_size" -gt 0 ]; then
++    delta_pct=$(( ( (size - prev_size) * 100 ) / prev_size ))
++    # absolute percent
++    if [ $delta_pct -lt 0 ]; then
++      delta_pct=$(( -1 * delta_pct ))
++    fi
++    if [ "$MAX_SIZE_DELTA_PCT" != 0 ] && [ "$delta_pct" -gt "$MAX_SIZE_DELTA_PCT" ]; then
++      fail=true
++      reason="${reason:+$reason,}size_delta>${MAX_SIZE_DELTA_PCT}%"
++    fi
++    # Export delta pct env
++    if [ -n "${GITHUB_ENV:-}" ]; then
++      case "$label" in
++        HOME) echo "HOMEPAGE_SIZE_DELTA_PCT=$delta_pct" >> "$GITHUB_ENV" ;;
++        ADMIN) echo "ADMIN_SIZE_DELTA_PCT=$delta_pct" >> "$GITHUB_ENV" ;;
++      esac
++    fi
++  fi
++  if [ -n "$prev_hash" ] && [ "$prev_hash" != "$body_hash" ]; then
++    reason="${reason:+$reason,}hash_changed"
++  fi
++  tv=""
++  if tv=$(threshold_violation "$label" "$ms" "$redirects"); then
++    fail=true
++    reason="${reason:+$reason,}threshold:${tv}"
++  fi
++  # export metrics
++  if [ -n "${GITHUB_ENV:-}" ]; then
++    case "$label" in
++    HOME)
++        {
++          echo "HOMEPAGE_STATUS=$code"
++          echo "HOMEPAGE_TIME_MS=$ms"
++          echo "HOMEPAGE_REDIRECTS=$redirects"
++      echo "HOMEPAGE_HASH=$body_hash"
++      echo "HOMEPAGE_SIZE=$size"
++          if [[ $reason == *threshold* ]]; then echo "HOMEPAGE_THRESHOLD_FAIL=true"; fi
++        } >> "$GITHUB_ENV"
++        ;;
++    ADMIN)
++        {
++          echo "ADMIN_STATUS=$code"
++          echo "ADMIN_TIME_MS=$ms"
++          echo "ADMIN_REDIRECTS=$redirects"
++      echo "ADMIN_HASH=$body_hash"
++      echo "ADMIN_SIZE=$size"
++          if [[ $reason == *threshold* ]]; then echo "ADMIN_THRESHOLD_FAIL=true"; fi
++        } >> "$GITHUB_ENV"
++        ;;
++    esac
++  fi
++  # copy bodies for artifact
++  cp "$body_file" "$ART_DIR/${label,,}.html" 2>/dev/null || true
++  append_json "$label" "$code" "$ms" "$redirects" "$size" "$url_eff" "$fail" "${reason:-none}" || true
++  # Export reason string for summary usage
++  if [ -n "${GITHUB_ENV:-}" ]; then
++    case "$label" in
++      HOME) echo "HOMEPAGE_REASON=${reason:-none}" >> "$GITHUB_ENV" ;;
++      ADMIN) echo "ADMIN_REASON=${reason:-none}" >> "$GITHUB_ENV" ;;
++    esac
++  fi
++  rm -f "$body_file" || true
++  if [ "$fail" = true ]; then
++    echo "[$label] FAIL reason=$reason" >&2
++    if [ "$ALLOW_FAILURE" != "true" ]; then
++      return 10
++    else
++      echo "[smoke] ALLOW_FAILURE=true => not failing pipeline" >&2
++    fi
++  else
++    echo "[$label] PASS" >&2
++  fi
++  return 0
++}
++
++rc_home=0; rc_admin=0
++run_check "/" HOME || rc_home=$?
++run_check "/wp-admin/" ADMIN || rc_admin=$?
++
++# Emit final JSON metrics file
++{
++  printf '{"checks":['
++  if [ -n "$JSON_ENTRIES" ]; then
++    # trim leading comma
++    printf '%s' "${JSON_ENTRIES#,}"
++  fi
++  printf ']}'
++} > "$META_JSON"
++
++if [ -n "${GITHUB_ENV:-}" ]; then
++  echo "HOMEPAGE_RC=$rc_home" >> "$GITHUB_ENV"
++  echo "ADMIN_RC=$rc_admin" >> "$GITHUB_ENV"
++fi
++if [ $rc_home -ne 0 ] || [ $rc_admin -ne 0 ]; then
++  echo "[smoke] Overall FAILED (home=$rc_home admin=$rc_admin)" >&2
++  if [ -n "${GITHUB_ENV:-}" ]; then echo "SMOKE_OVERALL_STATUS=failed" >> "$GITHUB_ENV"; fi
++  if [ "$NONBLOCKING" = "true" ]; then
++    echo "[smoke] NONBLOCKING=true -> continuing despite failure" >&2
++    exit 0
++  fi
++  if [ "$ALLOW_FAILURE" != "true" ]; then
++    exit 1
++  fi
++else
++  echo "[smoke] Overall PASS (allow_failure=$ALLOW_FAILURE)"
++  if [ -n "${GITHUB_ENV:-}" ]; then echo "SMOKE_OVERALL_STATUS=passed" >> "$GITHUB_ENV"; fi
++fi
+diff --git a/wp-content/mu-plugins/ci-litespeed-neutralizer.php b/wp-content/mu-plugins/ci-litespeed-neutralizer.php
+new file mode 100644
+index 00000000..98e171ba
+--- /dev/null
++++ b/wp-content/mu-plugins/ci-litespeed-neutralizer.php
+@@ -0,0 +1,145 @@
++<?php
++/**
++ * Plugin Name: CI LiteSpeed Neutralizer
++ * Description: Disables LiteSpeed Cache/Optimizer code paths during CI troubleshooting to prevent md5_file() fatals.
++ * Author: CI Automation
++ * Version: 1.0.0
++ * MU Plugin: Yes
++ */
++
++// If a real troubleshooting disable flag exists, set it very early.
++if ( ! defined( 'LITESPEED_DISABLE_ALL' ) ) {
++	define( 'LITESPEED_DISABLE_ALL', true );
++}
++// Common constant LiteSpeed checks to decide whether to bootstrap advanced cache.
++if ( ! defined( 'LSCACHE_ADV_CACHE' ) ) {
++	define( 'LSCACHE_ADV_CACHE', false );
++}
++// Extra defensive flags (harmless if unused by target plugin versions).
++if ( ! defined( 'LITESPEED_DISABLE_CRAWLER' ) ) {
++	define( 'LITESPEED_DISABLE_CRAWLER', true );
++}
++if ( ! defined( 'LITESPEED_DISABLE_OBJECT' ) ) {
++	define( 'LITESPEED_DISABLE_OBJECT', true );
++}
++
++// Remove optimizer shutdown callbacks if they get registered before we return (LiteSpeed normally attaches late).
++add_action( 'plugins_loaded', function () {
++	global $wp_filter;
++	if ( empty( $wp_filter['shutdown'] ) ) {
++		return;
++	}
++	foreach ( $wp_filter['shutdown'] as $priority => $callbacks ) {
++		if ( ! is_array( $callbacks ) ) {
++			continue;
++		}
++		foreach ( $callbacks as $id => $data ) {
++			$fn = $data['function'] ?? null;
++			if ( is_array( $fn ) && is_object( $fn[0] ) ) {
++				$class = get_class( $fn[0] );
++				if ( stripos( $class, 'LiteSpeed' ) !== false ) {
++					remove_action( 'shutdown', $fn, $priority );
++				}
++			}
++		}
++	}
++}, 1 ); // Run very early so later additions (if any) might still be blocked next load.
++
++// Provide stubs expected by other themes/plugins if they naively call LiteSpeed helpers.
++if ( ! function_exists( 'litespeed_optm' ) ) {
++	function litespeed_optm() {
++		return false; // Indicate optimization subsystem inactive.
++	}
++}
++
++// Namespaced stub(s) matching typical LiteSpeed class names to prevent autoloader attempts.
++// Some versions reference \LiteSpeed\Optimizer; we provide a no-op shell.
++if ( ! class_exists( '\\LiteSpeed\\Optimizer', false ) ) {
++	// phpcs:ignore PSR1.Classes.ClassDeclaration.MissingNamespace
++	class LiteSpeed_Optimizer_Namespace_Stub { public function __call( $n, $a ) { return false; } public static function __callStatic( $n, $a ) { return false; } }
++	// Create alias into expected FQCN if possible (cannot declare namespaced class inline easily without namespace block here)
++	if ( ! class_exists( 'LiteSpeed\\Optimizer', false ) ) {
++		// Use class_alias to satisfy references to \LiteSpeed\Optimizer
++		class_alias( 'LiteSpeed_Optimizer_Namespace_Stub', 'LiteSpeed\\Optimizer' );
++	}
++}
++
++// Suppress md5_file warnings on transient missing tmp assets that were causing fatals when converted to ErrorException.
++// We only intercept warnings containing 'md5_file' and 'litespeed' substrings to limit scope.
++if ( ! function_exists( '__ci_ls_md5_handler' ) ) {
++	function __ci_ls_md5_handler( $errno, $errstr ) {
++		if ( stripos( $errstr, 'md5_file' ) !== false && stripos( $errstr, 'litespeed' ) !== false ) {
++			// Swallow and mark handled.
++			return true;
++		}
++		return false; // Allow normal handling.
++	}
++	set_error_handler( '__ci_ls_md5_handler', E_WARNING | E_NOTICE | E_USER_WARNING );
++}
++
++// Marker so diagnostics can confirm neutralizer loaded.
++if ( ! defined( 'CI_LITESPEED_NEUTRALIZER_ACTIVE' ) ) {
++	define( 'CI_LITESPEED_NEUTRALIZER_ACTIVE', true );
++}
++
++// 1. Remove LiteSpeed from active plugin option values before plugins are loaded.
++function ci_ls_strip_active_plugins( $value ) {
++	if ( is_array( $value ) ) {
++		$value = array_values( array_filter( $value, function ( $slug ) {
++			return ( stripos( $slug, 'litespeed-cache' ) === false );
++		} ) );
++	}
++	return $value;
++}
++add_filter( 'option_active_plugins', 'ci_ls_strip_active_plugins', 1 );
++add_filter( 'site_option_active_sitewide_plugins', function ( $value ) {
++	if ( is_array( $value ) ) {
++		foreach ( array_keys( $value ) as $plugin_file ) {
++			if ( stripos( $plugin_file, 'litespeed-cache' ) !== false ) {
++				unset( $value[ $plugin_file ] );
++			}
++		}
++	}
++	return $value;
++}, 1 );
++
++// 2. Provide minimal class/interface stubs (global namespace) if LiteSpeed classes are referenced later.
++if ( ! class_exists( 'LiteSpeed\\Base', false ) ) {
++	class LiteSpeed_Base {}
++}
++if ( ! class_exists( 'LiteSpeed\\Optimizer', false ) ) {
++	class LiteSpeed_Optimizer {
++		public function __call( $name, $args ) { return false; }
++		public static function __callStatic( $name, $args ) { return false; }
++	}
++}
++// 3. Aggressively remove any LiteSpeed actions/filters that slipped through (runs on init priority 0)
++add_action( 'init', function () {
++	global $wp_filter;
++	$targets = array( 'init', 'template_redirect', 'shutdown', 'plugins_loaded' );
++	foreach ( $targets as $hook ) {
++		if ( empty( $wp_filter[ $hook ] ) ) { continue; }
++		foreach ( $wp_filter[ $hook ] as $priority => $callbacks ) {
++			if ( ! is_array( $callbacks ) ) { continue; }
++			foreach ( $callbacks as $id => $data ) {
++				$fn = $data['function'] ?? null;
++				if ( is_array( $fn ) && is_object( $fn[0] ) ) {
++					$cls = get_class( $fn[0] );
++					if ( stripos( $cls, 'LiteSpeed' ) !== false ) {
++						remove_action( $hook, $fn, $priority );
++					}
++				} elseif ( is_string( $fn ) && stripos( $fn, 'litespeed' ) !== false ) {
++					remove_action( $hook, $fn, $priority );
++				}
++			}
++		}
++	}
++}, 0 );
++
++// 4. Ensure asset directories exist to satisfy md5_file probes (defensive; cheap to create).
++add_action( 'muplugins_loaded', function () {
++	$content_dir = defined( 'WP_CONTENT_DIR' ) ? WP_CONTENT_DIR : dirname( __FILE__, 2 );
++	$ls_dir      = $content_dir . '/litespeed';
++	@wp_mkdir_p( $ls_dir . '/css' );
++	@wp_mkdir_p( $ls_dir . '/js' );
++}, 1 );
