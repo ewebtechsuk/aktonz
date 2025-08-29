@@ -29,9 +29,23 @@ HOSTINGER_SSH_USER=${HOSTINGER_SSH_USER:-}
 HOSTINGER_SSH_PORT=${HOSTINGER_SSH_PORT:-22}
 HOSTINGER_PATH=${HOSTINGER_PATH:-}
 PRODUCTION_URL=${PRODUCTION_URL:-}
-[ -n "$HOSTINGER_SSH_HOST" ] || fail "HOSTINGER_SSH_HOST missing"
-[ -n "$HOSTINGER_SSH_USER" ] || fail "HOSTINGER_SSH_USER missing"
-[ -n "$HOSTINGER_PATH" ] || fail "HOSTINGER_PATH missing"
+
+missing_vars=()
+[ -n "$HOSTINGER_SSH_HOST" ] || missing_vars+=(HOSTINGER_SSH_HOST)
+[ -n "$HOSTINGER_SSH_USER" ] || missing_vars+=(HOSTINGER_SSH_USER)
+[ -n "$HOSTINGER_PATH" ] || missing_vars+=(HOSTINGER_PATH)
+if [ ${#missing_vars[@]} -gt 0 ]; then
+  err "Missing required env vars: ${missing_vars[*]}"
+  cat >&2 <<EOM
+Add them to your .env or export before running, e.g.:
+  echo 'HOSTINGER_SSH_HOST=example.com' >> .env
+  echo 'HOSTINGER_SSH_USER=deploy' >> .env
+  echo 'HOSTINGER_SSH_PORT=22' >> .env
+  echo 'HOSTINGER_PATH=/home/deploy/public_html' >> .env
+Then re-run: scripts/push_prod.sh --dry-run
+EOM
+  exit 1
+fi
 
 # Ensure clean git state (avoid pushing untracked junk unknowingly)
 if [ -n "$(git status --porcelain | grep -E '^[AMDR]' || true)" ]; then
