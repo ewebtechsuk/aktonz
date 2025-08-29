@@ -63,6 +63,7 @@ run_check() {
   local url="$BASE_URL$path"
   local body_file
   body_file=$(mktemp)
+  trap 'rm -f "$body_file"' RETURN
   local metrics
   metrics=$($CURL_BIN -s -L -o "$body_file" -w '%{http_code} %{time_total} %{size_download} %{url_effective} %{num_redirects}' "$url" || echo "000 0 0 - 0")
   read -r code t_total size url_eff redirects <<<"$metrics"
@@ -78,7 +79,7 @@ run_check() {
     body_hash="hash_unavailable"
   fi
   local fail=false reason=""
-  if [ "$code" -ge 500 ]; then fail=true; reason="http${code}"; fi
+  if [ "$code" -ge 400 ]; then fail=true; reason="http${code}"; fi
   # "critical error" banner detection (non-fatal if not present)
   if grep -qi 'critical error' "$body_file" 2>/dev/null; then fail=true; reason="${reason:+$reason,}critical"; fi
   # Size delta vs previous (if provided)
@@ -148,7 +149,6 @@ run_check() {
       ADMIN) echo "ADMIN_REASON=${reason:-none}" >> "$GITHUB_ENV" ;;
     esac
   fi
-  rm -f "$body_file" || true
   if [ "$fail" = true ]; then
     echo "[$label] FAIL reason=$reason" >&2
     if [ "$ALLOW_FAILURE" != "true" ]; then

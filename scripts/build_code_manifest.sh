@@ -12,7 +12,6 @@ cd "$ROOT_DIR"
 BASE="wp-content"
 PLUG_DIR="$BASE/plugins"
 THEME_DIR="$BASE/themes"
-TMP_MANIFEST=$(mktemp)
 PLUGIN_JSON="[]"
 THEME_JSON="[]"
 calc_dir_hash() {

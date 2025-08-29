@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+command -v python3 >/dev/null 2>&1 || { echo "python3 required" >&2; exit 1; }
 
 # Compare two snapshot directories produced by remote_snapshot.sh.
 # Usage: scripts/diff_snapshots.sh SNAPSHOT_OLD SNAPSHOT_NEW
