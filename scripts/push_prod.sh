@@ -13,7 +13,7 @@
 #   - Writes remote .last_manual_push.json with commit + manifest hash
 # Excludes uploads & volatile dirs; mirrors .gitignore deploy patterns.
 set -euo pipefail
-DRY=0; DO_DELETE=0; SKIP_CONFIRM=0; NO_MANIFEST=0; IDENTITY_FILE=""
+DRY=0; DO_DELETE=0; SKIP_CONFIRM=0; NO_MANIFEST=0; TEST_SSH=0; IDENTITY_FILE=""
 
 # Argument parsing (supports value options)
 while [ $# -gt 0 ]; do
@@ -21,7 +21,8 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1; shift ;;
     --delete) DO_DELETE=1; shift ;;
     --skip-confirm) SKIP_CONFIRM=1; shift ;;
-    --no-manifest) NO_MANIFEST=1; shift ;;
+  --no-manifest) NO_MANIFEST=1; shift ;;
+  --test-ssh) TEST_SSH=1; shift ;;
     --identity|-i)
       [ $# -ge 2 ] || { echo "--identity requires a path" >&2; exit 1; }
       IDENTITY_FILE="$2"; shift 2 ;;
@@ -104,7 +105,16 @@ SSH_BASE=(ssh -p "$HOSTINGER_SSH_PORT")
 SSH_CMD=("${SSH_BASE[@]}")
 
 if ! "${SSH_CMD[@]}" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "test -d '$HOSTINGER_PATH'"; then
-  fail "Remote path missing or inaccessible: $HOSTINGER_PATH"
+  if [ $TEST_SSH -eq 1 ]; then
+    fail "SSH reachable but path missing/inaccessible: $HOSTINGER_PATH"
+  else
+    fail "Remote path missing or inaccessible: $HOSTINGER_PATH"
+  fi
+fi
+
+if [ $TEST_SSH -eq 1 ]; then
+  log "SSH connectivity OK and path exists: $HOSTINGER_PATH"
+  exit 0
 fi
 
 # Rsync exclude list
