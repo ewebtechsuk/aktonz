@@ -484,6 +484,61 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Snapshot wp-config (post-sanitization)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set -e
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
+          PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
+          TARGET=""
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then
+            TARGET="$ROOT_CFG"
+          elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then
+            TARGET="$PARENT_CFG"
+          else
+            BASE_DIR="$(dirname "$HOSTINGER_PATH")"
+            TARGET=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "find '$BASE_DIR' -maxdepth 4 -type f -name wp-config.php 2>/dev/null | head -n1" || true)
+          fi
+          if [ -z "$TARGET" ]; then
+            echo "[snapshot][warn] wp-config.php not found for snapshot"
+            exit 0
+          fi
+          echo "[snapshot] Target: $TARGET"
+          LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$TARGET' 2>/dev/null" || echo 0)
+            SIZE=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "stat -c %s '$TARGET' 2>/dev/null" || echo 0)
+          MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$TARGET' 2>/dev/null | awk '{print $1}'" || echo unknown)
+          WP_CACHE_COUNT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -i 'WP_CACHE' '$TARGET' 2>/dev/null | grep -c 'define' || true")
+          WP_CACHE_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -n -i 'WP_CACHE' '$TARGET' 2>/dev/null" || true)
+          printf '%s\n' "$WP_CACHE_LINES" | sed 's/^/[snapshot][grep]/'
+          # Pull a trimmed copy (omit salts for brevity) by removing lines containing AUTH_KEY, SECURE_AUTH_KEY etc.
+          TMP_LOCAL=wp-config.snapshot.post-sanitize.php
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cat '$TARGET'" \
+            | sed -E '/AUTH_KEY|SECURE_AUTH_KEY|LOGGED_IN_KEY|NONCE_KEY|AUTH_SALT|SECURE_AUTH_SALT|LOGGED_IN_SALT|NONCE_SALT/d' > "$TMP_LOCAL" || true
+          head -n 40 "$TMP_LOCAL" | sed 's/^/[snapshot][head]/'
+          tail -n 40 "$TMP_LOCAL" | sed 's/^/[snapshot][tail]/'
+          printf '{"path":"%s","lines":%s,"size":%s,"md5":"%s","wp_cache_defines":%s,"timestamp":"%s"}' \
+             "$TARGET" "$LINES" "$SIZE" "$MD5" "$WP_CACHE_COUNT" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+             > wp-config.snapshot.post-sanitize.json
+          echo "[snapshot] JSON: $(cat wp-config.snapshot.post-sanitize.json)"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Upload wp-config snapshot (post-sanitization)
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: wp-config-post-sanitize
+          path: |
+            wp-config.snapshot.post-sanitize.php
+            wp-config.snapshot.post-sanitize.json
+          if-no-files-found: warn
+          retention-days: 5
+
       - name: Scan for residual LiteSpeed references (post-neutralization)
         if: ${{ github.event.inputs.audit != 'true' }}
         run: |
