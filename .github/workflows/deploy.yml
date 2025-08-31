@@ -308,6 +308,31 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Restore critical plugins if accidentally disabled
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          # Some plugins are essential for site rendering; if they were renamed (_off_<slug>) restore them.
+          CRITICAL_SLUGS=(elementor elementor-pro jet-engine jet-elements jet-theme-core jet-menu jet-tabs jetformbuilder woocommerce wordpress-seo)
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          for slug in "${CRITICAL_SLUGS[@]}"; do
+            OFF_DIR="$HOSTINGER_PATH/wp-content/plugins/_off_${slug}"
+            LIVE_DIR="$HOSTINGER_PATH/wp-content/plugins/${slug}"
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$OFF_DIR' ]"; then
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$LIVE_DIR' ]"; then
+                echo "[restore-critical][skip] Live dir exists for $slug (off copy retained)";
+              else
+                echo "[restore-critical] Restoring $slug (_off_ -> live)";
+                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mv '$OFF_DIR' '$LIVE_DIR'" || echo "[restore-critical][warn] Failed to restore $slug";
+              fi
+            fi
+          done
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Guard & (if needed) recover wp-config before sanitation
         if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         id: cfg_guard
