@@ -1,0 +1,81 @@
+name: emergency-disable-plugin
+
+on:
+  workflow_dispatch:
+    inputs:
+      plugin:
+        description: "Plugin directory to disable (in wp-content/plugins)"
+        required: false
+        default: "litespeed-cache"
+      root_path_override:
+        description: "Explicit remote WP root path (overrides secret)"
+        required: false
+        default: ""
+      endpoints:
+        description: "Comma separated endpoints to curl (/,/wp-admin/,/wp-json/)"
+        required: false
+        default: "/,/wp-admin/,/wp-json/"
+
+jobs:
+  disable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (for reference)
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+
+      - name: Prepare host key
+        shell: bash
+        env:
+          HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOST:-}" ]; then echo "[emer][warn] HOST secret missing"; exit 0; fi
+          mkdir -p ~/.ssh; touch ~/.ssh/known_hosts; chmod 600 ~/.ssh/known_hosts
+          host_only=${HOST%%:*}
+          ssh-keyscan -p "${PORT:-22}" -t rsa,ecdsa,ed25519 "$host_only" 2>/dev/null >> ~/.ssh/known_hosts || true
+
+      - name: Disable plugin & purge cache
+        shell: bash
+        env:
+          HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          PROD_URL: ${{ secrets.PRODUCTION_URL }}
+          PLUGIN: ${{ github.event.inputs.plugin }}
+          EPS: ${{ github.event.inputs.endpoints }}
+          ROOT: ${{ github.event.inputs.root_path_override && github.event.inputs.root_path_override != '' && github.event.inputs.root_path_override || secrets.HOSTINGER_PATH }}
+        run: |
+          set -euo pipefail
+          echo "[emer] Root=$ROOT plugin=$PLUGIN endpoints=$EPS"
+          if ! ssh -o BatchMode=yes -p "$PORT" "$USER@$HOST" "echo ok" 2>/dev/null | grep -q '^ok'; then
+            echo "[emer][error] SSH connectivity failed"; exit 1; fi
+
+          # Disable plugin by renaming directory if active
+          ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/$PLUGIN' ]; then mv '$ROOT/wp-content/plugins/$PLUGIN' '$ROOT/wp-content/plugins/${PLUGIN}.disabled.$(date +%Y%m%d%H%M%S)'; echo '[emer] Renamed plugin directory'; else echo '[emer][info] Plugin directory not found (already disabled?)'; fi"
+
+            # Remove LiteSpeed generated asset/cache dir if present (only if disabling litespeed-cache)
+          if [ "$PLUGIN" = "litespeed-cache" ]; then
+            ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/litespeed' ]; then cd '$ROOT/wp-content' && tar -czf litespeed-cache-dir-$(date +%Y%m%d%H%M%S).tar.gz litespeed && rm -rf litespeed && echo '[emer] Purged wp-content/litespeed'; else echo '[emer][info] No litespeed cache dir'; fi"
+          fi
+
+          # Clear any debug mu-plugin we may have added earlier
+          ssh -p "$PORT" "$USER@$HOST" "rm -f '$ROOT/wp-content/mu-plugins/zzz-ci-diag-debug.php' 2>/dev/null || true"
+
+          # Curl endpoints
+          IFS=',' read -r -a ARR <<<"${EPS:-/,/wp-admin/,/wp-json/}"
+          for ep in "${ARR[@]}"; do
+            ep=$(echo "$ep" | xargs); [ -z "$ep" ] && continue
+            URL="${PROD_URL%/}$ep"
+            echo "[emer][curl] $ep -> $URL"
+            curl -s -o /dev/null -w "[emer][result] ep=%s code=%{http_code} time=%{time_total}s size=%{size_download}B\n" "$URL"
+          done
+
+          # Try to list active plugins via WP-CLI if available
+          ssh -p "$PORT" "$USER@$HOST" "command -v wp >/dev/null && (cd '$ROOT' && wp plugin list --status=active --field=name || true)" 2>/dev/null | sed 's/^/[emer][active_plugins]/' || true
