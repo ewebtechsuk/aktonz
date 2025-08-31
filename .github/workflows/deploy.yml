@@ -230,6 +230,42 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Health checkpoint (baseline_pre_plugin)
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
+        run: |
+          set +e
+          URL="${PRODUCTION_URL%/}/"
+          PHASE="baseline_pre_plugin"
+          STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          curl -s -S -D hc_${PHASE}_headers.txt -o hc_${PHASE}_body.html -w '%{http_code}' "$URL" > hc_${PHASE}_code.txt || true
+          CODE=$(cat hc_${PHASE}_code.txt 2>/dev/null || echo 0)
+          echo "[health][$PHASE] code=$CODE url=$URL"
+          # Remote wp-config metrics (best-effort)
+          CFG_PATH=""
+          ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
+          PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+          CFG_LINES=0; CFG_MD5=""
+          if [ -n "$CFG_PATH" ]; then
+            CFG_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG_PATH' 2>/dev/null" || echo 0)
+            CFG_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG_PATH' 2>/dev/null | awk '{print $1}'" || echo unknown)
+          fi
+          echo "{\"phase\":\"$PHASE\",\"code\":$CODE,\"ts\":\"$STAMP\",\"wp_config_lines\":$CFG_LINES,\"wp_config_md5\":\"$CFG_MD5\"}" >> health_timeline_raw.jsonl
+          if [ "$CODE" -ne 200 ]; then
+            echo "[health][$PHASE] non-200 detected; capturing remote log tails";
+            for lf in debug.log php-error.log error_log; do
+              if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then
+                ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true
+              fi
+            done
+          fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Prune stale LiteSpeed disabled copies (keep newest 2)
         if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
@@ -303,6 +339,27 @@ jobs:
             fi
           done
         env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Health checkpoint (post_plugin_disables)
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
+        run: |
+          set +e
+          URL="${PRODUCTION_URL%/}/"
+            PHASE="post_plugin_disables"; STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          curl -s -S -D hc_${PHASE}_headers.txt -o hc_${PHASE}_body.html -w '%{http_code}' "$URL" > hc_${PHASE}_code.txt || true
+          CODE=$(cat hc_${PHASE}_code.txt 2>/dev/null || echo 0)
+          echo "[health][$PHASE] code=$CODE"
+          CFG_PATH=""; ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php";
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+          CFG_LINES=0; CFG_MD5=""; if [ -n "$CFG_PATH" ]; then CFG_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG_PATH' 2>/dev/null" || echo 0); CFG_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG_PATH' 2>/dev/null | awk '{print $1}'" || echo unknown); fi
+          echo "{\"phase\":\"$PHASE\",\"code\":$CODE,\"ts\":\"$STAMP\",\"wp_config_lines\":$CFG_LINES,\"wp_config_md5\":\"$CFG_MD5\"}" >> health_timeline_raw.jsonl
+          if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
@@ -523,6 +580,26 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Health checkpoint (post_dropin_neutralization)
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
+        run: |
+          set +e
+          PHASE="post_dropin_neutralization"; STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          URL="${PRODUCTION_URL%/}/"; curl -s -S -D hc_${PHASE}_headers.txt -o hc_${PHASE}_body.html -w '%{http_code}' "$URL" > hc_${PHASE}_code.txt || true
+          CODE=$(cat hc_${PHASE}_code.txt 2>/dev/null || echo 0)
+          echo "[health][$PHASE] code=$CODE"
+          CFG_PATH=""; ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php";
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+          CFG_LINES=0; CFG_MD5=""; if [ -n "$CFG_PATH" ]; then CFG_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG_PATH' 2>/dev/null" || echo 0); CFG_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG_PATH' 2>/dev/null | awk '{print $1}'" || echo unknown); fi
+          echo "{\"phase\":\"$PHASE\",\"code\":$CODE,\"ts\":\"$STAMP\",\"wp_config_lines\":$CFG_LINES,\"wp_config_md5\":\"$CFG_MD5\"}" >> health_timeline_raw.jsonl
+          if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Snapshot wp-config (post-sanitization)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
@@ -617,6 +694,26 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Health checkpoint (post_aggressive_neutralization)
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' }}
+        run: |
+          set +e
+          PHASE="post_aggressive_neutralization"; STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          URL="${PRODUCTION_URL%/}/"; curl -s -S -D hc_${PHASE}_headers.txt -o hc_${PHASE}_body.html -w '%{http_code}' "$URL" > hc_${PHASE}_code.txt || true
+          CODE=$(cat hc_${PHASE}_code.txt 2>/dev/null || echo 0)
+          echo "[health][$PHASE] code=$CODE"
+          CFG_PATH=""; ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php";
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+          CFG_LINES=0; CFG_MD5=""; if [ -n "$CFG_PATH" ]; then CFG_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG_PATH' 2>/dev/null" || echo 0); CFG_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG_PATH' 2>/dev/null | awk '{print $1}'" || echo unknown); fi
+          echo "{\"phase\":\"$PHASE\",\"code\":$CODE,\"ts\":\"$STAMP\",\"wp_config_lines\":$CFG_LINES,\"wp_config_md5\":\"$CFG_MD5\"}" >> health_timeline_raw.jsonl
+          if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Stop after audit (audit-only)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.audit == 'true' }}
         run: |
@@ -703,6 +800,26 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           DELETE_REMOTE: ${{ secrets.DELETE_REMOTE }}
           DRY_RUN_INPUT: ${{ github.event.inputs.dry_run }}
+
+      - name: Health checkpoint (post_rsync)
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set +e
+          PHASE="post_rsync"; STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          URL="${PRODUCTION_URL%/}/"; curl -s -S -D hc_${PHASE}_headers.txt -o hc_${PHASE}_body.html -w '%{http_code}' "$URL" > hc_${PHASE}_code.txt || true
+          CODE=$(cat hc_${PHASE}_code.txt 2>/dev/null || echo 0)
+          echo "[health][$PHASE] code=$CODE"
+          CFG_PATH=""; ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php";
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+          CFG_LINES=0; CFG_MD5=""; if [ -n "$CFG_PATH" ]; then CFG_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG_PATH' 2>/dev/null" || echo 0); CFG_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG_PATH' 2>/dev/null | awk '{print $1}'" || echo unknown); fi
+          echo "{\"phase\":\"$PHASE\",\"code\":$CODE,\"ts\":\"$STAMP\",\"wp_config_lines\":$CFG_LINES,\"wp_config_md5\":\"$CFG_MD5\"}" >> health_timeline_raw.jsonl
+          if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Collect deployment metadata (remote state)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
@@ -818,6 +935,26 @@ jobs:
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-post][dir] /'" || true
           fi
         env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Health checkpoint (post_post_rsync_litespeed_purge)
+        if: ${{ success() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set +e
+          PHASE="post_post_rsync_litespeed_purge"; STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          URL="${PRODUCTION_URL%/}/"; curl -s -S -D hc_${PHASE}_headers.txt -o hc_${PHASE}_body.html -w '%{http_code}' "$URL" > hc_${PHASE}_code.txt || true
+          CODE=$(cat hc_${PHASE}_code.txt 2>/dev/null || echo 0)
+          echo "[health][$PHASE] code=$CODE"
+          CFG_PATH=""; ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php";
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+          CFG_LINES=0; CFG_MD5=""; if [ -n "$CFG_PATH" ]; then CFG_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG_PATH' 2>/dev/null" || echo 0); CFG_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG_PATH' 2>/dev/null | awk '{print $1}'" || echo unknown); fi
+          echo "{\"phase\":\"$PHASE\",\"code\":$CODE,\"ts\":\"$STAMP\",\"wp_config_lines\":$CFG_LINES,\"wp_config_md5\":\"$CFG_MD5\"}" >> health_timeline_raw.jsonl
+          if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
@@ -1291,6 +1428,62 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           MARKER_SHA256: ${{ env.MARKER_SHA256 }}
+
+      - name: Health checkpoint (post_validation)
+        if: ${{ always() && env.PRODUCTION_URL != '' && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set +e
+          PHASE="post_validation"; STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          URL="${PRODUCTION_URL%/}/"; curl -s -S -D hc_${PHASE}_headers.txt -o hc_${PHASE}_body.html -w '%{http_code}' "$URL" > hc_${PHASE}_code.txt || true
+          CODE=$(cat hc_${PHASE}_code.txt 2>/dev/null || echo 0)
+          echo "[health][$PHASE] code=$CODE"
+          CFG_PATH=""; ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php";
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+          CFG_LINES=0; CFG_MD5=""; if [ -n "$CFG_PATH" ]; then CFG_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG_PATH' 2>/dev/null" || echo 0); CFG_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG_PATH' 2>/dev/null | awk '{print $1}'" || echo unknown); fi
+          echo "{\"phase\":\"$PHASE\",\"code\":$CODE,\"ts\":\"$STAMP\",\"wp_config_lines\":$CFG_LINES,\"wp_config_md5\":\"$CFG_MD5\"}" >> health_timeline_raw.jsonl
+          if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Compile health timeline
+        if: ${{ always() && github.event.inputs.audit != 'true' }}
+        run: |
+          if [ -f health_timeline_raw.jsonl ]; then
+            echo '[' > health_timeline.json
+            LC=0
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              if [ $LC -gt 0 ]; then echo ',' >> health_timeline.json; fi
+              printf '%s' "$line" >> health_timeline.json
+              LC=$((LC+1))
+            done < health_timeline_raw.jsonl
+            echo ']' >> health_timeline.json
+            echo "[health][timeline] Compiled health_timeline.json with $LC entries"
+            head -n 5 health_timeline_raw.jsonl | sed 's/^/[health][timeline][sample] /'
+          else
+            echo "[health][timeline] No raw timeline file present"
+          fi
+
+      - name: Upload health timeline artifacts
+        if: ${{ always() && github.event.inputs.audit != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-timeline
+          path: |
+            health_timeline_raw.jsonl
+            health_timeline.json
+            hc_*_headers.txt
+            hc_*_body.html
+            hc_*_code.txt
+            hc_*_debug.log
+            hc_*_php-error.log
+            hc_*_error_log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload validation summary
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
