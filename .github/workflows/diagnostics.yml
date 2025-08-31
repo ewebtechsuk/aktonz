@@ -19,6 +19,10 @@ on:
         description: "Activate temporary safe mode (true/false)"
         required: false
         default: "false"
+      root_path_override:
+        description: "(Optional) Explicit remote WP root path overriding secret (e.g. /home/USER/domains/example.com/public_html)"
+        required: false
+        default: ""
 
 jobs:
   gather:
@@ -54,7 +58,7 @@ jobs:
           HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           USER: ${{ secrets.HOSTINGER_SSH_USER }}
           PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          ROOT: ${{ secrets.HOSTINGER_PATH }}
+          ROOT: ${{ github.event.inputs.root_path_override && github.event.inputs.root_path_override != '' && github.event.inputs.root_path_override || secrets.HOSTINGER_PATH }}
           DEPTH: ${{ github.event.inputs.depth }}
           EPS: ${{ github.event.inputs.endpoints }}
           DEBUG_FLAG: ${{ github.event.inputs.debug }}
