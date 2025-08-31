@@ -19,6 +19,14 @@ on:
         description: "Activate temporary safe mode (true/false)"
         required: false
         default: "false"
+      retain_safe_mode:
+        description: "If safe_mode true, leave site in safe mode after run (true/false)"
+        required: false
+        default: "false"
+      auto_disable_litespeed:
+        description: "Auto disable LiteSpeed Cache plugin if fatal signature detected (true/false)"
+        required: false
+        default: "true"
       root_path_override:
         description: "(Optional) Explicit remote WP root path overriding secret (e.g. /home/USER/domains/example.com/public_html)"
         required: false
@@ -64,13 +72,15 @@ jobs:
           EPS: ${{ github.event.inputs.endpoints }}
           DEBUG_FLAG: ${{ github.event.inputs.debug }}
           SAFE_MODE: ${{ github.event.inputs.safe_mode }}
+          RETAIN_SAFE_MODE: ${{ github.event.inputs.retain_safe_mode }}
+          AUTO_DISABLE_LSCACHE: ${{ github.event.inputs.auto_disable_litespeed }}
           PROD_URL: ${{ secrets.PRODUCTION_URL }}
         shell: bash
         run: |
           set -euo pipefail
           DEPTH=${DEPTH:-200}
           ROOT=$(printf '%s' "$ROOT" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
-          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG safe_mode=$SAFE_MODE"
+          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG safe_mode=$SAFE_MODE retain=$RETAIN_SAFE_MODE auto_disable_lscache=$AUTO_DISABLE_LSCACHE"
           CAN_SSH=0
           if [ -n "${HOST:-}" ] && [ -n "${USER:-}" ]; then
             if ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -p "$PORT" "$USER@$HOST" "echo ok" 2>/dev/null | grep -q '^ok'; then
@@ -90,6 +100,8 @@ jobs:
             ssh -p "$PORT" "$USER@$HOST" "chmod +x '$ROOT/ci-safe-mode.sh' && WP_PATH='$ROOT' bash '$ROOT/ci-safe-mode.sh' enable" || echo "[diag][warn] safe mode activation failed"
           fi
           if [ "$CAN_SSH" = 1 ]; then
+            echo "[diag] DB connectivity test"
+            ssh -p "$PORT" "$USER@$HOST" "php -r 'include \"$ROOT/wp-config.php\"; \$d=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); if(!\$d){echo \"[db][error] ".mysqli_connect_error()."\\n\";} else {echo \"[db] connect ok\\n\"; mysqli_close(\$d);} '" 2>/dev/null || echo "[diag][warn] DB test command failed"
             CFG="$ROOT/wp-config.php"
             if ssh -p "$PORT" "$USER@$HOST" "[ -f '$CFG' ]"; then
               echo "[diag] wp-config.php head (20)"; ssh -p "$PORT" "$USER@$HOST" "head -n 20 '$CFG'" | sed 's/^/[cfg][head]/'
@@ -129,9 +141,21 @@ jobs:
             if ssh -p "$PORT" "$USER@$HOST" "command -v php >/dev/null"; then
               echo "[diag] Active plugins option"; ssh -p "$PORT" "$USER@$HOST" "php -r 'include \"$ROOT/wp-load.php\"; echo json_encode(get_option(\"active_plugins\"));'" 2>/dev/null | sed 's/^/[active_plugins]/' || true
             fi
-            if [ "${SAFE_MODE,,}" = "true" ]; then
+            # Auto-disable LiteSpeed Cache if fatal signature present and requested
+            if [ "${AUTO_DISABLE_LSCACHE,,}" = "true" ]; then
+              if ssh -p "$PORT" "$USER@$HOST" "grep -q 'optimizer.cls.php:149' '$ROOT/wp-content/debug.log' 2>/dev/null"; then
+                echo "[diag][auto] Detected LiteSpeed fatal signature; attempting deactivation"
+                if ssh -p "$PORT" "$USER@$HOST" "command -v wp >/dev/null"; then
+                  ssh -p "$PORT" "$USER@$HOST" "cd '$ROOT' && wp plugin deactivate litespeed-cache --path='$ROOT' --allow-root" || echo "[diag][auto][warn] wp-cli deactivate failed"
+                fi
+                ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/litespeed-cache' ]; then mv '$ROOT/wp-content/plugins/litespeed-cache' '$ROOT/wp-content/plugins/litespeed-cache.auto-disabled' 2>/dev/null || true; fi"
+              fi
+            fi
+            if [ "${SAFE_MODE,,}" = "true" ] && [ "${RETAIN_SAFE_MODE,,}" != "true" ]; then
               echo "[diag] Safe mode restore (leave site unchanged after capture)"
               ssh -p "$PORT" "$USER@$HOST" "WP_PATH='$ROOT' bash '$ROOT/ci-safe-mode.sh' disable" || echo "[diag][warn] safe mode restore failed"
+            elif [ "${SAFE_MODE,,}" = "true" ] && [ "${RETAIN_SAFE_MODE,,}" = "true" ]; then
+              echo "[diag] Retaining safe mode (no restore)"
             fi
           else
             echo "[diag][info] Skipped remote log and plugin capture due to SSH unavailability"
