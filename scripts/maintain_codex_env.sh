@@ -22,19 +22,49 @@ err(){ printf '[maint][error] %s\n' "$*" >&2; }
 fail(){ err "$*"; exit 1; }
 need(){ command -v "$1" >/dev/null 2>&1 || fail "Required command '$1' not found"; }
 
-need docker
-
-if ! docker info >/dev/null 2>&1; then
-  fail "Docker daemon not reachable"
+DOCKER_AVAILABLE=1
+if ! command -v docker >/dev/null 2>&1; then
+  DOCKER_AVAILABLE=0
+  err "docker command not found – switching to LIMITED local wp-cli mode"
+else
+  if ! docker info >/dev/null 2>&1; then
+    err "Docker daemon not reachable – limited local mode"
+    DOCKER_AVAILABLE=0
+  fi
 fi
 
-compose(){ docker compose $COMPOSE_PROJECT "$@"; }
-wp(){ compose exec -T wordpress wp "$@"; }
+compose(){
+  if [ $DOCKER_AVAILABLE -eq 1 ]; then
+    docker compose $COMPOSE_PROJECT "$@"
+  else
+    err "compose command unavailable (no docker)"
+    return 1
+  fi
+}
+
+# wp(): transparently use docker exec when available; fallback to local wp-cli (wp or wp-cli.phar)
+wp(){
+  if [ $DOCKER_AVAILABLE -eq 1 ]; then
+    compose exec -T wordpress wp "$@"
+  else
+    # Local fallback: ensure wp-cli present
+    if command -v wp >/dev/null 2>&1; then
+      wp "$@"
+    else
+      if [ -f wp-cli.phar ]; then
+        php wp-cli.phar "$@" --allow-root
+      else
+        err "wp-cli not available locally; run: curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o wp-cli.phar && chmod +x wp-cli.phar"
+        return 1
+      fi
+    fi
+  fi
+}
 
 usage(){ cat <<'EOF'
 Commands:
   help                       Show this help
-  status                     Show container status + WP version
+  status                     Show environment/container status + WP version
   logs [svc]                 Tail logs (default wordpress) (Ctrl+C to exit)
   shell [svc]                Shell into container (default wordpress)
   wp <args...>               Run arbitrary wp-cli command
@@ -56,11 +86,11 @@ Commands:
   db-size                    Show table sizes
   optimize-db                Optimize all tables
   health                     Basic site health checks (HTTP + db + core updates)
-  recreate                   docker compose down --volumes && up -d (destructive DB!)
+  recreate                   docker compose down --volumes && up -d (destructive DB!) (docker mode only)
   down                       Stop containers
   up                         Start containers
-  prune                      Remove dangling docker images & volumes (global)
-  hard-reset                 Remove containers, volumes, generated salts, then fresh up
+  prune                      Remove dangling docker images & volumes (global) (docker mode only)
+  hard-reset                 Remove containers, volumes, generated salts, then fresh up (docker mode only)
   info                       Show key environment variables
 EOF
 }
@@ -70,12 +100,26 @@ cmd=${1:-help}; shift || true
 case "$cmd" in
   help|-h|--help) usage; exit 0 ;;
   status)
-    compose ps
-    if compose exec -T wordpress wp core version >/dev/null 2>&1; then
-      log "WP Version: $(wp core version)"
-      log "Site URL: $(wp option get siteurl)"
+    if [ $DOCKER_AVAILABLE -eq 1 ]; then
+      compose ps || true
+      if compose exec -T wordpress wp core version >/dev/null 2>&1; then
+        log "WP Version: $(wp core version)"
+        log "Site URL: $(wp option get siteurl)"
+      else
+        log "WordPress not yet installed (docker)"
+      fi
     else
-      log "WordPress not yet installed"
+      # Local status
+      if [ -f wp-config.php ]; then
+        if wp core version >/dev/null 2>&1; then
+          log "WP Version: $(wp core version)"
+          log "Site URL: $(wp option get siteurl || echo 'n/a')"
+        else
+          log "wp-cli cannot query core version (maybe not installed)"
+        fi
+      else
+        log "No wp-config.php found (run setup script)"
+      fi
     fi
     ;;
   logs)
@@ -173,18 +217,24 @@ case "$cmd" in
     log "Plugin updates: $(wp plugin list --update=available --field=name | wc -l | tr -d ' ')"
     ;;
   recreate)
+    [ $DOCKER_AVAILABLE -eq 1 ] || fail "recreate only valid in docker mode"
     read -r -p "Destructive: drop containers & volumes. Continue? (y/N) " ans; [[ $ans == y* ]] || exit 0
     compose down -v
     compose up -d --build
     ;;
-  down) compose down ;; 
-  up) compose up -d ;; 
+  down)
+    [ $DOCKER_AVAILABLE -eq 1 ] || fail "down only valid in docker mode"
+    compose down ;;
+  up)
+    if [ $DOCKER_AVAILABLE -eq 1 ]; then compose up -d; else fail "up only valid in docker mode"; fi ;;
   prune)
+    [ $DOCKER_AVAILABLE -eq 1 ] || fail "prune only valid in docker mode"
     read -r -p "Prune dangling images & unused volumes (global)? (y/N) " ans; [[ $ans == y* ]] || exit 0
     docker image prune -f
     docker volume prune -f
     ;;
   hard-reset)
+    [ $DOCKER_AVAILABLE -eq 1 ] || fail "hard-reset only valid in docker mode"
     read -r -p "Hard reset (down -v + remove salts + fresh up)? (y/N) " ans; [[ $ans == y* ]] || exit 0
     compose down -v || true
     rm -f wp-config-local.php
@@ -192,10 +242,21 @@ case "$cmd" in
     ;;
   info)
     log "Project: $PROJECT_NAME"
-    log "Site URL: ${SITE_URL}"
-    log "DB: ${DB_NAME}@db as ${DB_USER}"
-    log "HTTP Port: ${SITE_HTTP_PORT}"
-    log "phpMyAdmin: http://localhost:${PHPMYADMIN_PORT:-8081}"
+    if [ $DOCKER_AVAILABLE -eq 1 ]; then
+      log "Mode: docker"
+      log "Site URL: ${SITE_URL}"
+      log "DB: ${DB_NAME}@db as ${DB_USER}"
+      log "HTTP Port: ${SITE_HTTP_PORT}"
+      log "phpMyAdmin: http://localhost:${PHPMYADMIN_PORT:-8081}"
+    else
+      log "Mode: local (no docker)"
+      if [ -f wp-config.php ]; then
+        wp core version 2>/dev/null && log "Core: $(wp core version)" || true
+        log "Site URL: $(wp option get siteurl 2>/dev/null || echo 'unset')"
+      else
+        log "WordPress not initialized. Run codex_manual_setup.sh or codex_lite_sqlite_setup.sh"
+      fi
+    fi
     ;;
   *)
     err "Unknown command: $cmd"
