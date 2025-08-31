@@ -143,6 +143,12 @@ jobs:
             echo "[diag][auto][force] Force disabling LiteSpeed Cache plugin"
             ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/litespeed-cache' ]; then mv '$ROOT/wp-content/plugins/litespeed-cache' '$ROOT/wp-content/plugins/litespeed-cache.force-disabled' 2>/dev/null || true; fi"
             LSCACHE_AUTO_DISABLED=1
+          elif [ "$CAN_SSH" = 1 ]; then
+            # If plugin already absent, note it
+            if ! ssh -p "$PORT" "$USER@$HOST" "[ -d '$ROOT/wp-content/plugins/litespeed-cache' ]"; then
+              echo "[diag][auto][info] LiteSpeed plugin directory already absent"
+              LSCACHE_AUTO_DISABLED=1
+            fi
           fi
           if [ "$CAN_SSH" = 1 ] && [ "${AUTO_DISABLE_LSCACHE,,}" = "true" ]; then
             if ssh -p "$PORT" "$USER@$HOST" "grep -q 'optimizer.cls.php:149' '$ROOT/wp-content/debug.log' 2>/dev/null"; then
@@ -199,22 +205,27 @@ jobs:
             elif [ "${SAFE_MODE,,}" = "true" ] && [ "${RETAIN_SAFE_MODE,,}" = "true" ]; then
               echo "[diag] Retaining safe mode (no restore)"
             fi
-            # Build human-readable and JSON summaries
-            SUMMARY_TXT="diag_summary.txt"
-            SUMMARY_JSON="diag_summary.json"
+            # Build human-readable and JSON summaries (simplified to avoid syntax issues)
+            SUMMARY_TXT="diag_summary.txt"; SUMMARY_JSON="diag_summary.json"
             {
               echo "lscache_auto_disabled=$LSCACHE_AUTO_DISABLED"
               echo "db_auth_errors=$DB_AUTH_ERRS"
               echo "endpoints:"
-              cat diag_endpoint_codes.txt | sed 's/^/  /'
+              sed 's/^/  /' diag_endpoint_codes.txt
             } > "$SUMMARY_TXT"
-            # JSON assembly (simple)
             {
               echo '{'
               echo "  \"lscache_auto_disabled\": $LSCACHE_AUTO_DISABLED,"
               echo "  \"db_auth_errors\": $DB_AUTH_ERRS,"
               echo "  \"endpoints\": ["
-              awk -F"\t" 'NR>1{print ","}{printf "    {\"endpoint\": \""$1"\", \"code\": "$2"}"}' diag_endpoint_codes.txt | sed '1s/^,//'
+              first=1
+              while IFS=$'\t' read -r ep code; do
+                [ -z "$ep" ] && continue
+                if [ $first -eq 0 ]; then echo ","; fi
+                printf '    {"endpoint": "%s", "code": %s}' "$ep" "$code"
+                first=0
+              done < diag_endpoint_codes.txt
+              echo
               echo "  ]"
               echo '}'
             } > "$SUMMARY_JSON"
