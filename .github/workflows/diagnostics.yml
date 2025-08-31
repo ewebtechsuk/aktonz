@@ -83,7 +83,7 @@ jobs:
             curl -s -S -D "headers${safe}.txt" -o "body${safe}.html" -w "\n[diag] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "$URL" || echo "[diag][warn] curl failed $ep"
             head -n 60 "body${safe}.html" | sed "s/^/[diag][body${safe}]/" || true
           done
-          for logf in debug.log php-error.log error_log; do
+          for logf in debug.log php-error.log error_log fatal-requests.log; do
             if ssh -p "$PORT" "$USER@$HOST" "[ -f '$ROOT/wp-content/$logf' ]"; then
               echo "[diag] Tail $logf"; ssh -p "$PORT" "$USER@$HOST" "tail -n $DEPTH '$ROOT/wp-content/$logf'" | sed "s/^/[log:$logf]/" || true
             fi
