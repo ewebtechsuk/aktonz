@@ -266,6 +266,30 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Config diff & snapshot tracker (baseline_pre_plugin)
+        if: ${{ always() && github.event.inputs.audit != 'true' }}
+        run: |
+          set +e
+          LAST=$(tail -n1 health_timeline_raw.jsonl 2>/dev/null || echo '')
+          [ -z "$LAST" ] && echo "[cfg-diff][baseline] No timeline yet" && exit 0
+          PHASE=$(printf '%s' "$LAST" | sed -E 's/.*"phase":"([^"]+)".*/\1/')
+          MD5=$(printf '%s' "$LAST" | sed -E 's/.*"wp_config_md5":"([^"]+)".*/\1/')
+          if [ -n "$MD5" ] && [ "$MD5" != "${PREV_WP_CFG_MD5:-}" ]; then
+            echo "[cfg-diff][$PHASE] wp-config md5 changed prev='${PREV_WP_CFG_MD5:-none}' new='$MD5'"
+            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"; CFG_PATH="";
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+            if [ -n "$CFG_PATH" ]; then
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cp '$CFG_PATH' '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; sed -E -i \"s/(DB_(NAME|USER|PASSWORD)'?, *')[^']*'/\\1***'/Ig\" '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; head -n 25 '$CFG_PATH.ci.sanitized.tmp'; echo '...'; tail -n 25 '$CFG_PATH.ci.sanitized.tmp'" > diff_${PHASE}_wp-config_sanitized.txt 2>/dev/null || true
+              echo "[cfg-diff][$PHASE] captured sanitized head/tail"
+            fi
+          fi
+          echo "PREV_WP_CFG_MD5=$MD5" >> $GITHUB_ENV
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Prune stale LiteSpeed disabled copies (keep newest 2)
         if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
@@ -360,6 +384,28 @@ jobs:
           if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Config diff & snapshot tracker (post_plugin_disables)
+        if: ${{ always() && github.event.inputs.audit != 'true' }}
+        run: |
+          set +e
+          LAST=$(tail -n1 health_timeline_raw.jsonl 2>/dev/null || echo '')
+            PHASE=$(printf '%s' "$LAST" | sed -E 's/.*"phase":"([^"]+)".*/\1/')
+          MD5=$(printf '%s' "$LAST" | sed -E 's/.*"wp_config_md5":"([^"]+)".*/\1/')
+          if [ -n "$MD5" ] && [ "$MD5" != "${PREV_WP_CFG_MD5:-}" ]; then
+            echo "[cfg-diff][$PHASE] wp-config md5 changed prev='${PREV_WP_CFG_MD5:-none}' new='$MD5'"
+            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"; CFG_PATH="";
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+            if [ -n "$CFG_PATH" ]; then
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cp '$CFG_PATH' '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; sed -E -i \"s/(DB_(NAME|USER|PASSWORD)'?, *')[^']*'/\\1***'/Ig\" '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; head -n 25 '$CFG_PATH.ci.sanitized.tmp'; echo '...'; tail -n 25 '$CFG_PATH.ci.sanitized.tmp'" > diff_${PHASE}_wp-config_sanitized.txt 2>/dev/null || true
+            fi
+          fi
+          echo "PREV_WP_CFG_MD5=$MD5" >> $GITHUB_ENV
+        env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
@@ -600,6 +646,28 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Config diff & snapshot tracker (post_dropin_neutralization)
+        if: ${{ always() && github.event.inputs.audit != 'true' }}
+        run: |
+          set +e
+          LAST=$(tail -n1 health_timeline_raw.jsonl 2>/dev/null || echo '')
+          PHASE=$(printf '%s' "$LAST" | sed -E 's/.*"phase":"([^"]+)".*/\1/')
+          MD5=$(printf '%s' "$LAST" | sed -E 's/.*"wp_config_md5":"([^"]+)".*/\1/')
+          if [ -n "$MD5" ] && [ "$MD5" != "${PREV_WP_CFG_MD5:-}" ]; then
+            echo "[cfg-diff][$PHASE] wp-config md5 changed prev='${PREV_WP_CFG_MD5:-none}' new='$MD5'"
+            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"; CFG_PATH="";
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+            if [ -n "$CFG_PATH" ]; then
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cp '$CFG_PATH' '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; sed -E -i \"s/(DB_(NAME|USER|PASSWORD)'?, *')[^']*'/\\1***'/Ig\" '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; head -n 25 '$CFG_PATH.ci.sanitized.tmp'; echo '...'; tail -n 25 '$CFG_PATH.ci.sanitized.tmp'" > diff_${PHASE}_wp-config_sanitized.txt 2>/dev/null || true
+            fi
+          fi
+          echo "PREV_WP_CFG_MD5=$MD5" >> $GITHUB_ENV
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Snapshot wp-config (post-sanitization)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
@@ -714,6 +782,28 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Config diff & snapshot tracker (post_aggressive_neutralization)
+        if: ${{ always() && github.event.inputs.audit != 'true' }}
+        run: |
+          set +e
+          LAST=$(tail -n1 health_timeline_raw.jsonl 2>/dev/null || echo '')
+          PHASE=$(printf '%s' "$LAST" | sed -E 's/.*"phase":"([^"]+)".*/\1/')
+          MD5=$(printf '%s' "$LAST" | sed -E 's/.*"wp_config_md5":"([^"]+)".*/\1/')
+          if [ -n "$MD5" ] && [ "$MD5" != "${PREV_WP_CFG_MD5:-}" ]; then
+            echo "[cfg-diff][$PHASE] wp-config md5 changed prev='${PREV_WP_CFG_MD5:-none}' new='$MD5'"
+            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"; CFG_PATH="";
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+            if [ -n "$CFG_PATH" ]; then
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cp '$CFG_PATH' '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; sed -E -i \"s/(DB_(NAME|USER|PASSWORD)'?, *')[^']*'/\\1***'/Ig\" '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; head -n 25 '$CFG_PATH.ci.sanitized.tmp'; echo '...'; tail -n 25 '$CFG_PATH.ci.sanitized.tmp'" > diff_${PHASE}_wp-config_sanitized.txt 2>/dev/null || true
+            fi
+          fi
+          echo "PREV_WP_CFG_MD5=$MD5" >> $GITHUB_ENV
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Stop after audit (audit-only)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.audit == 'true' }}
         run: |
@@ -816,6 +906,41 @@ jobs:
           if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Config diff & snapshot tracker (post_rsync)
+        if: ${{ always() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set +e
+          LAST=$(tail -n1 health_timeline_raw.jsonl 2>/dev/null || echo '')
+          PHASE=$(printf '%s' "$LAST" | sed -E 's/.*"phase":"([^"]+)".*/\1/')
+          MD5=$(printf '%s' "$LAST" | sed -E 's/.*"wp_config_md5":"([^"]+)".*/\1/')
+          CODE=$(cat hc_post_rsync_code.txt 2>/dev/null || echo 0)
+          if [ -n "$MD5" ] && [ "$MD5" != "${PREV_WP_CFG_MD5:-}" ]; then
+            echo "[cfg-diff][$PHASE] wp-config md5 changed prev='${PREV_WP_CFG_MD5:-none}' new='$MD5'"
+            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"; CFG_PATH="";
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+            if [ -n "$CFG_PATH" ]; then
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cp '$CFG_PATH' '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; sed -E -i \"s/(DB_(NAME|USER|PASSWORD)'?, *')[^']*'/\\1***'/Ig\" '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; head -n 25 '$CFG_PATH.ci.sanitized.tmp'; echo '...'; tail -n 25 '$CFG_PATH.ci.sanitized.tmp'" > diff_${PHASE}_wp-config_sanitized.txt 2>/dev/null || true
+            fi
+          fi
+          if [ "$CODE" -eq 200 ] && [ -z "${GOOD_WP_CONFIG_REMOTE:-}" ]; then
+            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"; CFG_PATH="";
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+            if [ -n "$CFG_PATH" ]; then
+              SNAP="$CFG_PATH.ci.good.$(date -u +%Y%m%dT%H%M%SZ)"
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cp '$CFG_PATH' '$SNAP' 2>/dev/null || true" || true
+              echo "[snapshot][$PHASE] Captured first healthy wp-config snapshot: $SNAP"
+              echo "GOOD_WP_CONFIG_REMOTE=$SNAP" >> $GITHUB_ENV
+              echo "FIRST_HEALTHY_MD5=$MD5" >> $GITHUB_ENV
+              echo "FIRST_HEALTHY_PHASE=$PHASE" >> $GITHUB_ENV
+            fi
+          fi
+          echo "PREV_WP_CFG_MD5=$MD5" >> $GITHUB_ENV
+        env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
@@ -955,6 +1080,28 @@ jobs:
           if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Config diff & snapshot tracker (post_post_rsync_litespeed_purge)
+        if: ${{ always() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set +e
+          LAST=$(tail -n1 health_timeline_raw.jsonl 2>/dev/null || echo '')
+          PHASE=$(printf '%s' "$LAST" | sed -E 's/.*"phase":"([^"]+)".*/\1/')
+          MD5=$(printf '%s' "$LAST" | sed -E 's/.*"wp_config_md5":"([^"]+)".*/\1/')
+          if [ -n "$MD5" ] && [ "$MD5" != "${PREV_WP_CFG_MD5:-}" ]; then
+            echo "[cfg-diff][$PHASE] wp-config md5 changed prev='${PREV_WP_CFG_MD5:-none}' new='$MD5'"
+            ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"; CFG_PATH="";
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+            if [ -n "$CFG_PATH" ]; then
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "cp '$CFG_PATH' '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; sed -E -i \"s/(DB_(NAME|USER|PASSWORD)'?, *')[^']*'/\\1***'/Ig\" '$CFG_PATH.ci.sanitized.tmp' 2>/dev/null || true; head -n 25 '$CFG_PATH.ci.sanitized.tmp'; echo '...'; tail -n 25 '$CFG_PATH.ci.sanitized.tmp'" > diff_${PHASE}_wp-config_sanitized.txt 2>/dev/null || true
+            fi
+          fi
+          echo "PREV_WP_CFG_MD5=$MD5" >> $GITHUB_ENV
+        env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
@@ -1444,6 +1591,49 @@ jobs:
           if [ "$CODE" -ne 200 ]; then for lf in debug.log php-error.log error_log; do if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$lf' ]"; then ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 120 '$HOSTINGER_PATH/wp-content/$lf'" > "hc_${PHASE}_$lf" 2>/dev/null || true; fi; done; fi
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Auto-restore healthy wp-config if regression
+        if: ${{ always() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set +e
+          FINAL_CODE=$(cat hc_post_validation_code.txt 2>/dev/null || echo 0)
+          echo "[restore-check] final_code=$FINAL_CODE good_snapshot='${GOOD_WP_CONFIG_REMOTE:-}' first_healthy_md5='${FIRST_HEALTHY_MD5:-}'"
+          if [ "$FINAL_CODE" -eq 200 ] || [ -z "${GOOD_WP_CONFIG_REMOTE:-}" ]; then
+            echo "[restore-check] No restore needed."; exit 0
+          fi
+          ROOT_CFG="$HOSTINGER_PATH/wp-config.php"; PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"; CURR_CFG="";
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CURR_CFG="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CURR_CFG="$PARENT_CFG"; fi
+          if [ -z "$CURR_CFG" ]; then echo "[restore][fatal] Current wp-config not found"; exit 0; fi
+          STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "[restore] Attempting restore from $GOOD_WP_CONFIG_REMOTE"
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$GOOD_WP_CONFIG_REMOTE' ]; then cp '$CURR_CFG' '$CURR_CFG.ci.bad.$STAMP' 2>/dev/null || true; cp '$GOOD_WP_CONFIG_REMOTE' '$CURR_CFG' 2>/dev/null || true; fi" || true
+          sleep 6
+          curl -s -S -o /dev/null -w '%{http_code}' "${PRODUCTION_URL%/}/" > hc_auto_restore_code.txt || true
+          NEW_CODE=$(cat hc_auto_restore_code.txt 2>/dev/null || echo 0)
+          CFG_LINES=0; CFG_MD5=""; CFG_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CURR_CFG' 2>/dev/null" || echo 0); CFG_MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CURR_CFG' 2>/dev/null | awk '{print $1}'" || echo unknown)
+          STAMP2=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "{\"phase\":\"auto_restore_after_validation\",\"code\":$NEW_CODE,\"ts\":\"$STAMP2\",\"wp_config_lines\":$CFG_LINES,\"wp_config_md5\":\"$CFG_MD5\"}" >> health_timeline_raw.jsonl
+          if [ "$NEW_CODE" -eq 200 ]; then echo "RESTORE_SUCCESS=1" >> $GITHUB_ENV; echo "[restore] Successful recovery to 200"; else echo "RESTORE_FAILED=1" >> $GITHUB_ENV; echo "[restore][warn] Restore did not recover site (code=$NEW_CODE)"; fi
+        env:
+          PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Fail on unresolved regression
+        if: ${{ always() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          FINAL_CODE=$(cat hc_post_validation_code.txt 2>/dev/null || echo 0)
+          if [ "$FINAL_CODE" -ne 200 ] && [ -n "${GOOD_WP_CONFIG_REMOTE:-}" ] && [ -z "${RESTORE_SUCCESS:-}" ]; then
+            echo "[regression][fatal] Site unhealthy after validation (code=$FINAL_CODE) and restore unsuccessful"; exit 1
+          fi
+          echo "[regression] No failing regression condition triggered."
+        env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
