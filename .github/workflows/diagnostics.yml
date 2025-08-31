@@ -27,6 +27,10 @@ on:
         description: "Auto disable LiteSpeed Cache plugin if fatal signature detected (true/false)"
         required: false
         default: "true"
+      force_disable_litespeed:
+        description: "Force disable (rename) LiteSpeed Cache plugin regardless of signature (true/false)"
+        required: false
+        default: "false"
       root_path_override:
         description: "(Optional) Explicit remote WP root path overriding secret (e.g. /home/USER/domains/example.com/public_html)"
         required: false
@@ -74,13 +78,14 @@ jobs:
           SAFE_MODE: ${{ github.event.inputs.safe_mode }}
           RETAIN_SAFE_MODE: ${{ github.event.inputs.retain_safe_mode }}
           AUTO_DISABLE_LSCACHE: ${{ github.event.inputs.auto_disable_litespeed }}
+          FORCE_DISABLE_LSCACHE: ${{ github.event.inputs.force_disable_litespeed }}
           PROD_URL: ${{ secrets.PRODUCTION_URL }}
         shell: bash
         run: |
           set -euo pipefail
           DEPTH=${DEPTH:-200}
           ROOT=$(printf '%s' "$ROOT" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
-          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG safe_mode=$SAFE_MODE retain=$RETAIN_SAFE_MODE auto_disable_lscache=$AUTO_DISABLE_LSCACHE"
+          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG safe_mode=$SAFE_MODE retain=$RETAIN_SAFE_MODE auto_disable_lscache=$AUTO_DISABLE_LSCACHE force_disable_lscache=$FORCE_DISABLE_LSCACHE"
           CAN_SSH=0
           if [ -n "${HOST:-}" ] && [ -n "${USER:-}" ]; then
             if ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -p "$PORT" "$USER@$HOST" "echo ok" 2>/dev/null | grep -q '^ok'; then
@@ -122,8 +127,13 @@ jobs:
               rm -f "$TMP"
             fi
           fi
-          # Early LiteSpeed fatal signature detection & auto-disable (before curls)
+          # Early LiteSpeed force & fatal signature detection & auto-disable (before curls)
           LSCACHE_AUTO_DISABLED=0
+          if [ "$CAN_SSH" = 1 ] && [ "${FORCE_DISABLE_LSCACHE,,}" = "true" ]; then
+            echo "[diag][auto][force] Force disabling LiteSpeed Cache plugin"
+            ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/litespeed-cache' ]; then mv '$ROOT/wp-content/plugins/litespeed-cache' '$ROOT/wp-content/plugins/litespeed-cache.force-disabled' 2>/dev/null || true; fi"
+            LSCACHE_AUTO_DISABLED=1
+          fi
           if [ "$CAN_SSH" = 1 ] && [ "${AUTO_DISABLE_LSCACHE,,}" = "true" ]; then
             if ssh -p "$PORT" "$USER@$HOST" "grep -q 'optimizer.cls.php:149' '$ROOT/wp-content/debug.log' 2>/dev/null"; then
               echo "[diag][auto][pre] Detected LiteSpeed fatal signature pre-curl; attempting mitigation"
@@ -141,7 +151,8 @@ jobs:
             ep=$(echo "$ep" | xargs)
             [ -z "$ep" ] && continue
             URL="${PROD_URL%/}$ep"
-            safe=$(echo "$ep"|tr '/?' '_')
+            # Derive a filesystem-safe token for artifact filenames (replace / and ?)
+            safe=$(printf '%s' "$ep" | tr '/?' '_')
             echo "[diag] Curling $ep -> $URL";
             curl -s -S -D "headers${safe}.txt" -o "body${safe}.html" -w "\n[diag] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "$URL" || echo "[diag][warn] curl failed $ep"
             head -n 60 "body${safe}.html" | sed "s/^/[diag][body${safe}]/" || true
@@ -152,6 +163,7 @@ jobs:
             curl -s -S -D headers__auto.txt -o body__auto.html -w "\n[diag][auto][verify] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "${PROD_URL%/}/" || echo "[diag][auto][warn] curl verify failed"
             head -n 40 body__auto.html | sed 's/^/[diag][auto][body]/' || true
           fi
+          echo "[diag][debug] Reached post-curl block (about to capture logs)"
           if [ "$CAN_SSH" = 1 ]; then
             for logf in debug.log php-error.log error_log fatal-requests.log; do
               if ssh -p "$PORT" "$USER@$HOST" "[ -f '$ROOT/wp-content/$logf' ]"; then
