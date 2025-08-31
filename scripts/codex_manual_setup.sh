@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+## codex_manual_setup.sh - Minimal manual WordPress ("codex") bootstrap for shared hosting / plain Linux.
+## Safe to re-run (idempotent). Creates .env, fetches wp-cli, installs WordPress if missing, sets salts, optional plugins.
+## Usage:
+##   bash scripts/codex_manual_setup.sh \
+##     --url https://example.com \
+##     --title "Site Title" \
+##     --admin-user admin --admin-pass 'StrongPass123!' --admin-email you@example.com \
+##     --db-name wpdb --db-user wpuser --db-pass 'dbpass' [--db-host localhost] [--prefix wp_] [--force]
+## Environment overrides (export or put in existing .env): DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, TABLE_PREFIX, SITE_URL
+set -euo pipefail
+
+FORCE=0
+URL=""; TITLE=""; ADMIN_USER=""; ADMIN_PASS=""; ADMIN_EMAIL="";
+DB_NAME=""; DB_USER=""; DB_PASS=""; DB_HOST="localhost"; PREFIX="wp_";
+PLUGINS_CORE=(akismet)
+PLUGINS_OPTIONAL=(wordpress-seo)
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --url) URL="$2"; shift 2 ;;
+    --title) TITLE="$2"; shift 2 ;;
+    --admin-user) ADMIN_USER="$2"; shift 2 ;;
+    --admin-pass) ADMIN_PASS="$2"; shift 2 ;;
+    --admin-email) ADMIN_EMAIL="$2"; shift 2 ;;
+    --db-name) DB_NAME="$2"; shift 2 ;;
+    --db-user) DB_USER="$2"; shift 2 ;;
+    --db-pass) DB_PASS="$2"; shift 2 ;;
+    --db-host) DB_HOST="$2"; shift 2 ;;
+    --prefix) PREFIX="$2"; shift 2 ;;
+    --force) FORCE=1; shift ;;
+    -h|--help) sed -n '1,120p' "$0"; exit 0 ;;
+    *) echo "Unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
+
+log(){ printf '[codex] %s\n' "$*"; }
+fail(){ log "ERROR: $*" >&2; exit 1; }
+need(){ command -v "$1" >/dev/null 2>&1 || fail "Need $1"; }
+
+# Try to load existing .env if present
+[ -f .env ] && set -o allexport && . ./.env && set +o allexport || true
+
+# Fill from env if not passed
+DB_NAME=${DB_NAME:-${DB_NAME_ENV:-${DB_NAME:-${DB_NAME:-${DB_NAME_DEFAULT:-wpdb}}}}}
+DB_USER=${DB_USER:-${DB_USER_ENV:-wpuser}}
+DB_PASS=${DB_PASS:-${DB_PASSWORD:-wpsecret}}
+DB_HOST=${DB_HOST:-${DB_HOST_ENV:-localhost}}
+PREFIX=${PREFIX:-${TABLE_PREFIX:-wp_}}
+URL=${URL:-${SITE_URL:-}}
+
+[ -n "$DB_NAME" ] || fail "DB name required"
+[ -n "$DB_USER" ] || fail "DB user required"
+[ -n "$DB_PASS" ] || fail "DB password required"
+[ -n "$URL" ] || log "(info) --url not supplied; will skip installation unless already installed"
+
+need php
+need curl
+need awk
+
+# Acquire wp-cli if missing
+if ! command -v wp >/dev/null 2>&1; then
+  if [ ! -f wp-cli.phar ]; then
+    log "Fetching wp-cli.phar"
+    curl -fsSL https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar -o wp-cli.phar
+  fi
+  chmod +x wp-cli.phar
+  WP="php wp-cli.phar"
+else
+  WP="wp"
+fi
+
+# Generate .env if absent
+if [ ! -f .env ]; then
+  log "Creating .env"
+  cat > .env <<EOF
+DB_NAME=$DB_NAME
+DB_USER=$DB_USER
+DB_PASSWORD=$DB_PASS
+DB_HOST=$DB_HOST
+TABLE_PREFIX=$PREFIX
+SITE_URL=$URL
+EOF
+else
+  log ".env exists (skipping create)"
+fi
+
+# Download core if missing
+if [ ! -f wp-settings.php ]; then
+  log "Downloading WordPress core"
+  $WP core download --quiet
+else
+  log "Core present"
+fi
+
+# Create wp-config if missing or forced
+if [ ! -f wp-config.php ] || [ $FORCE -eq 1 ]; then
+  [ $FORCE -eq 1 ] && log "--force: regenerating wp-config.php"
+  rm -f wp-config.php
+  log "Generating wp-config.php"
+  $WP config create \
+    --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASS" --dbhost="$DB_HOST" \
+    --dbprefix="$PREFIX" --skip-check --quiet
+  log "Injecting .env loader + salts"
+  SALTS=$(curl -fsSL https://api.wordpress.org/secret-key/1.1/salt/ || true)
+  awk 'NR==1{print "<?php"} {print}' wp-config.php > wp-config.tmp && mv wp-config.tmp wp-config.php
+  printf '\n// Load .env if present\nif (file_exists(__DIR__.'"'/.env'"')) { foreach (parse_ini_file(__DIR__.'"'/.env'"') as $k=>$v){ if(!getenv($k)) putenv("$k=$v"); } }\n' >> wp-config.php
+  printf '// Salts (regenerated)\n%s\n' "$SALTS" >> wp-config.php
+fi
+
+# Install if not installed and URL/admin provided
+if ! $WP core is-installed >/dev/null 2>&1; then
+  if [ -n "$URL" ] && [ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ] && [ -n "$ADMIN_EMAIL" ]; then
+    log "Running core install"
+    $WP core install --url="$URL" --title="$TITLE" \
+      --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASS" --admin_email="$ADMIN_EMAIL"
+  else
+    log "Skipping install (missing --url or admin creds)"
+  fi
+else
+  log "WordPress already installed"
+fi
+
+# Ensure search & home URLs match if URL provided
+if [ -n "$URL" ]; then
+  CURR=$($WP option get siteurl 2>/dev/null || echo '')
+  if [ "$CURR" != "$URL" ]; then
+    log "Updating siteurl/home to $URL"
+    $WP option update siteurl "$URL" >/dev/null
+    $WP option update home "$URL" >/dev/null
+  fi
+fi
+
+# Install essential plugins
+for p in "${PLUGINS_CORE[@]}"; do
+  $WP plugin is-installed "$p" 2>/dev/null || { log "Installing plugin $p"; $WP plugin install "$p" --activate --quiet || true; }
+done
+
+# Optional plugins (ignore failures)
+for p in "${PLUGINS_OPTIONAL[@]}"; do
+  $WP plugin is-installed "$p" 2>/dev/null || $WP plugin install "$p" --activate --quiet || true
+done
+
+log "Done. Next: add themes/plugins or run: $WP plugin list"
+log "Re-run with --force after adjusting .env to regenerate config if needed." 
