@@ -1,4 +1,4 @@
-name: On-demand Diagnostics
+name: diagnostics
 
 on:
   workflow_dispatch:
@@ -21,15 +21,16 @@ on:
         default: "false"
 
 jobs:
-  diag:
+  gather:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+            ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
       - name: Collect diagnostics
         env:
           HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
