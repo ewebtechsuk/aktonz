@@ -83,11 +83,11 @@ jobs:
             echo "[diag][warn] HOST/USER not set; skipping remote capture"
           fi
           if [ "$CAN_SSH" = 1 ] && [ "${SAFE_MODE,,}" = "true" ]; then
-            echo "[diag] Activating safe mode (plugin allowlist)"
+            echo "[diag] Activating safe mode (disable plugins + default theme)"
             LOCAL_SCRIPT="safe_mode.sh"
             if [ -f "scripts/safe_mode.sh" ]; then LOCAL_SCRIPT="scripts/safe_mode.sh"; fi
             scp -P "$PORT" "$LOCAL_SCRIPT" "$USER@$HOST:$ROOT/ci-safe-mode.sh" 2>/dev/null || true
-            ssh -p "$PORT" "$USER@$HOST" "chmod +x '$ROOT/ci-safe-mode.sh' && WP_ROOT='$ROOT' bash '$ROOT/ci-safe-mode.sh'" || echo "[diag][warn] safe mode activation failed"
+            ssh -p "$PORT" "$USER@$HOST" "chmod +x '$ROOT/ci-safe-mode.sh' && WP_PATH='$ROOT' bash '$ROOT/ci-safe-mode.sh' enable" || echo "[diag][warn] safe mode activation failed"
           fi
           if [ "$CAN_SSH" = 1 ]; then
             CFG="$ROOT/wp-config.php"
@@ -131,7 +131,7 @@ jobs:
             fi
             if [ "${SAFE_MODE,,}" = "true" ]; then
               echo "[diag] Safe mode restore (leave site unchanged after capture)"
-              ssh -p "$PORT" "$USER@$HOST" "WP_ROOT='$ROOT' bash '$ROOT/ci-safe-mode.sh' --restore" || echo "[diag][warn] safe mode restore failed"
+              ssh -p "$PORT" "$USER@$HOST" "WP_PATH='$ROOT' bash '$ROOT/ci-safe-mode.sh' disable" || echo "[diag][warn] safe mode restore failed"
             fi
           else
             echo "[diag][info] Skipped remote log and plugin capture due to SSH unavailability"
