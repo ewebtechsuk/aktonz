@@ -41,13 +41,19 @@ need(){ command -v "$1" >/dev/null 2>&1 || fail "Need $1"; }
 # Try to load existing .env if present
 [ -f .env ] && set -o allexport && . ./.env && set +o allexport || true
 
-# Fill from env if not passed
-DB_NAME=${DB_NAME:-${DB_NAME_ENV:-${DB_NAME:-${DB_NAME:-${DB_NAME_DEFAULT:-wpdb}}}}}
+# Fill from env if not passed (database)
+DB_NAME=${DB_NAME:-${DB_NAME_ENV:-${DB_NAME_DEFAULT:-wpdb}}}
 DB_USER=${DB_USER:-${DB_USER_ENV:-wpuser}}
 DB_PASS=${DB_PASS:-${DB_PASSWORD:-wpsecret}}
 DB_HOST=${DB_HOST:-${DB_HOST_ENV:-localhost}}
 PREFIX=${PREFIX:-${TABLE_PREFIX:-wp_}}
-URL=${URL:-${SITE_URL:-}}
+
+# Admin + site fallbacks (multiple possible env names for convenience)
+URL=${URL:-${CODEX_SITE_URL:-${WP_SITE_URL:-${SITE_URL:-}}}}
+TITLE=${TITLE:-${CODEX_SITE_TITLE:-${WP_SITE_TITLE:-WordPress Site}}}
+ADMIN_USER=${ADMIN_USER:-${CODEX_ADMIN_USER:-${WP_ADMIN_USER:-}}}
+ADMIN_PASS=${ADMIN_PASS:-${CODEX_ADMIN_PASS:-${WP_ADMIN_PASS:-}}}
+ADMIN_EMAIL=${ADMIN_EMAIL:-${CODEX_ADMIN_EMAIL:-${WP_ADMIN_EMAIL:-}}}
 
 [ -n "$DB_NAME" ] || fail "DB name required"
 [ -n "$DB_USER" ] || fail "DB user required"
@@ -123,11 +129,15 @@ CORE_INSTALLED=1
 if ! $WP core is-installed >/dev/null 2>&1; then
   CORE_INSTALLED=0
   if [ -n "$URL" ] && [ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ] && [ -n "$ADMIN_EMAIL" ]; then
-    log "Running core install"
-    $WP core install --url="$URL" --title="$TITLE" \
-      --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASS" --admin_email="$ADMIN_EMAIL"
+    log "Running core install (url=$URL user=$ADMIN_USER)"
+    if $WP core install --url="$URL" --title="$TITLE" \
+      --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASS" --admin_email="$ADMIN_EMAIL"; then
+      CORE_INSTALLED=1
+    else
+      log "Install command failed" >&2
+    fi
   else
-    log "Skipping install (missing --url or admin creds)"
+    log "Skipping install (missing URL or admin creds)"
   fi
 else
   log "WordPress already installed"
@@ -143,15 +153,23 @@ if [ -n "$URL" ] && [ $CORE_INSTALLED -eq 1 ]; then
   fi
 fi
 
-# Install essential plugins
-for p in "${PLUGINS_CORE[@]}"; do
-  $WP plugin is-installed "$p" 2>/dev/null || { log "Installing plugin $p"; $WP plugin install "$p" --activate --quiet || true; }
-done
+# Plugins only if core installed
+if [ $CORE_INSTALLED -eq 1 ]; then
+  # Install essential plugins
+  for p in "${PLUGINS_CORE[@]}"; do
+    $WP plugin is-installed "$p" 2>/dev/null || { log "Installing plugin $p"; $WP plugin install "$p" --activate --quiet || true; }
+  done
+  # Optional plugins (ignore failures)
+  for p in "${PLUGINS_OPTIONAL[@]}"; do
+    $WP plugin is-installed "$p" 2>/dev/null || $WP plugin install "$p" --activate --quiet || true
+  done
+else
+  log "Skipping plugin installs (core not installed)"
+fi
 
-# Optional plugins (ignore failures)
-for p in "${PLUGINS_OPTIONAL[@]}"; do
-  $WP plugin is-installed "$p" 2>/dev/null || $WP plugin install "$p" --activate --quiet || true
-done
-
-log "Done. Next: add themes/plugins or run: $WP plugin list"
+if [ $CORE_INSTALLED -eq 1 ]; then
+  log "Done. Site ready at: ${URL:-<unknown URL>}"
+else
+  log "Done (partial). Core not installed; re-run with URL + admin creds or set env vars CODEX_SITE_URL, CODEX_ADMIN_USER, CODEX_ADMIN_PASS, CODEX_ADMIN_EMAIL"
+fi
 log "Re-run with --force after adjusting .env to regenerate config if needed." 
