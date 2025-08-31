@@ -122,6 +122,20 @@ jobs:
               rm -f "$TMP"
             fi
           fi
+          # Early LiteSpeed fatal signature detection & auto-disable (before curls)
+          LSCACHE_AUTO_DISABLED=0
+          if [ "$CAN_SSH" = 1 ] && [ "${AUTO_DISABLE_LSCACHE,,}" = "true" ]; then
+            if ssh -p "$PORT" "$USER@$HOST" "grep -q 'optimizer.cls.php:149' '$ROOT/wp-content/debug.log' 2>/dev/null"; then
+              echo "[diag][auto][pre] Detected LiteSpeed fatal signature pre-curl; attempting mitigation"
+              # Try wp-cli deactivate first (may fail if DB auth failing)
+              if ssh -p "$PORT" "$USER@$HOST" "command -v wp >/dev/null"; then
+                ssh -p "$PORT" "$USER@$HOST" "cd '$ROOT' && wp plugin deactivate litespeed-cache --path='$ROOT' --allow-root" || echo "[diag][auto][warn] wp-cli deactivate failed (may be DB issue)"
+              fi
+              # Rename plugin directory if still present
+              ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/litespeed-cache' ]; then mv '$ROOT/wp-content/plugins/litespeed-cache' '$ROOT/wp-content/plugins/litespeed-cache.auto-disabled' 2>/dev/null || true; fi"
+              LSCACHE_AUTO_DISABLED=1
+            fi
+          fi
           IFS=',' read -r -a ARR <<<"${EPS:-/,/wp-admin/,/wp-json/}"
           for ep in "${ARR[@]}"; do
             ep=$(echo "$ep" | xargs)
@@ -132,6 +146,12 @@ jobs:
             curl -s -S -D "headers${safe}.txt" -o "body${safe}.html" -w "\n[diag] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "$URL" || echo "[diag][warn] curl failed $ep"
             head -n 60 "body${safe}.html" | sed "s/^/[diag][body${safe}]/" || true
           done
+          # If we auto-disabled LiteSpeed above, re-curl primary endpoint to see immediate effect
+          if [ "$LSCACHE_AUTO_DISABLED" = 1 ]; then
+            echo "[diag][auto][verify] Re-curling / after LiteSpeed disable"
+            curl -s -S -D headers__auto.txt -o body__auto.html -w "\n[diag][auto][verify] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "${PROD_URL%/}/" || echo "[diag][auto][warn] curl verify failed"
+            head -n 40 body__auto.html | sed 's/^/[diag][auto][body]/' || true
+          fi
           if [ "$CAN_SSH" = 1 ]; then
             for logf in debug.log php-error.log error_log fatal-requests.log; do
               if ssh -p "$PORT" "$USER@$HOST" "[ -f '$ROOT/wp-content/$logf' ]"; then
@@ -141,15 +161,11 @@ jobs:
             if ssh -p "$PORT" "$USER@$HOST" "command -v php >/dev/null"; then
               echo "[diag] Active plugins option"; ssh -p "$PORT" "$USER@$HOST" "php -r 'include \"$ROOT/wp-load.php\"; echo json_encode(get_option(\"active_plugins\"));'" 2>/dev/null | sed 's/^/[active_plugins]/' || true
             fi
-            # Auto-disable LiteSpeed Cache if fatal signature present and requested
-            if [ "${AUTO_DISABLE_LSCACHE,,}" = "true" ]; then
-              if ssh -p "$PORT" "$USER@$HOST" "grep -q 'optimizer.cls.php:149' '$ROOT/wp-content/debug.log' 2>/dev/null"; then
-                echo "[diag][auto] Detected LiteSpeed fatal signature; attempting deactivation"
-                if ssh -p "$PORT" "$USER@$HOST" "command -v wp >/dev/null"; then
-                  ssh -p "$PORT" "$USER@$HOST" "cd '$ROOT' && wp plugin deactivate litespeed-cache --path='$ROOT' --allow-root" || echo "[diag][auto][warn] wp-cli deactivate failed"
-                fi
-                ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/litespeed-cache' ]; then mv '$ROOT/wp-content/plugins/litespeed-cache' '$ROOT/wp-content/plugins/litespeed-cache.auto-disabled' 2>/dev/null || true; fi"
-              fi
+            # Database auth error detection summary
+            DB_AUTH_ERRS=0
+            if ssh -p "$PORT" "$USER@$HOST" "grep -q 'mysqli_real_connect(): (HY000/1045)' '$ROOT/wp-content/debug.log' 2>/dev/null"; then
+              DB_AUTH_ERRS=$(ssh -p "$PORT" "$USER@$HOST" "grep -c 'mysqli_real_connect(): (HY000/1045)' '$ROOT/wp-content/debug.log' 2>/dev/null || echo 0)
+              echo "[diag][db][warn] Detected $DB_AUTH_ERRS MySQL auth failures (HY000/1045). Check DB_HOST, DB_USER, DB_PASSWORD in wp-config.php and ensure MySQL grants (GRANT ALL ON db.* TO 'user'@'localhost' IDENTIFIED BY 'pass'; FLUSH PRIVILEGES;)."
             fi
             if [ "${SAFE_MODE,,}" = "true" ] && [ "${RETAIN_SAFE_MODE,,}" != "true" ]; then
               echo "[diag] Safe mode restore (leave site unchanged after capture)"
@@ -157,6 +173,7 @@ jobs:
             elif [ "${SAFE_MODE,,}" = "true" ] && [ "${RETAIN_SAFE_MODE,,}" = "true" ]; then
               echo "[diag] Retaining safe mode (no restore)"
             fi
+            echo "[diag][summary] lscache_auto_disabled=$LSCACHE_AUTO_DISABLED db_auth_errors=$DB_AUTH_ERRS"
           else
             echo "[diag][info] Skipped remote log and plugin capture due to SSH unavailability"
           fi
