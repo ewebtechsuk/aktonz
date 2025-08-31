@@ -1,0 +1,90 @@
+name: On-demand Diagnostics
+
+on:
+  workflow_dispatch:
+    inputs:
+      depth:
+        description: "Log lines to tail (default 200)"
+        required: false
+        default: "200"
+      endpoints:
+        description: "Comma-separated endpoints to curl (default: /,/wp-admin/,/wp-json/)"
+        required: false
+        default: "/,/wp-admin/,/wp-json/"
+      debug:
+        description: "Enable WP_DEBUG temporarily (true/false)"
+        required: false
+        default: "false"
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+      - name: Collect diagnostics
+        env:
+          HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          ROOT: ${{ secrets.HOSTINGER_PATH }}
+          DEPTH: ${{ github.event.inputs.depth }}
+          EPS: ${{ github.event.inputs.endpoints }}
+          DEBUG_FLAG: ${{ github.event.inputs.debug }}
+          PROD_URL: ${{ secrets.PRODUCTION_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPTH=${DEPTH:-200}
+          ROOT=$(printf '%s' "$ROOT" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG"
+          CFG="$ROOT/wp-config.php"
+          if ssh -p "$PORT" "$USER@$HOST" "[ -f '$CFG' ]"; then
+            echo "[diag] wp-config.php head (20)"; ssh -p "$PORT" "$USER@$HOST" "head -n 20 '$CFG'" | sed 's/^/[cfg][head]/'
+            echo "[diag] wp-config.php WP_CACHE lines"; ssh -p "$PORT" "$USER@$HOST" "grep -n -i WP_CACHE '$CFG' 2>/dev/null" | sed 's/^/[cfg][cache]/' || true
+          else
+            echo "[diag][warn] wp-config.php not found"
+          fi
+          if [ "${DEBUG_FLAG,,}" = "true" ]; then
+            echo "[diag] Enabling runtime WP_DEBUG via mu-plugin"
+            MU_DIR="$ROOT/wp-content/mu-plugins"; TMP="ci-debug-diag.php";
+            ssh -p "$PORT" "$USER@$HOST" "mkdir -p '$MU_DIR'"
+            printf "%s\n" "<?php" \
+              "if (!defined('WP_DEBUG')) define('WP_DEBUG', true);" \
+              "if (!defined('WP_DEBUG_LOG')) define('WP_DEBUG_LOG', true);" \
+              "if (!defined('WP_DEBUG_DISPLAY')) define('WP_DEBUG_DISPLAY', false);" \
+              "error_log('[ci-diag] temporary debug mu-plugin active');" > "$TMP"
+            scp -P "$PORT" "$TMP" "$USER@$HOST:$MU_DIR/zzz-ci-diag-debug.php" 2>/dev/null || true
+            rm -f "$TMP"
+          fi
+          IFS=',' read -r -a ARR <<<"${EPS:-/,/wp-admin/,/wp-json/}"
+          for ep in "${ARR[@]}"; do
+            ep=$(echo "$ep" | xargs)
+            [ -z "$ep" ] && continue
+            URL="${PROD_URL%/}$ep"
+            safe=$(echo "$ep"|tr '/?' '_')
+            echo "[diag] Curling $ep -> $URL";
+            curl -s -S -D "headers${safe}.txt" -o "body${safe}.html" -w "\n[diag] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "$URL" || echo "[diag][warn] curl failed $ep"
+            head -n 60 "body${safe}.html" | sed "s/^/[diag][body${safe}]/" || true
+          done
+          for logf in debug.log php-error.log error_log; do
+            if ssh -p "$PORT" "$USER@$HOST" "[ -f '$ROOT/wp-content/$logf' ]"; then
+              echo "[diag] Tail $logf"; ssh -p "$PORT" "$USER@$HOST" "tail -n $DEPTH '$ROOT/wp-content/$logf'" | sed "s/^/[log:$logf]/" || true
+            fi
+          done
+          if ssh -p "$PORT" "$USER@$HOST" "command -v php >/dev/null"; then
+            echo "[diag] Active plugins option"; ssh -p "$PORT" "$USER@$HOST" "php -r 'include \"$ROOT/wp-load.php\"; echo json_encode(get_option(\"active_plugins\"));'" 2>/dev/null | sed 's/^/[active_plugins]/' || true
+          fi
+      - name: Archive diagnostics artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-output
+          path: |
+            *body*.html
+            *headers*.txt
+          if-no-files-found: ignore
+          retention-days: 5
