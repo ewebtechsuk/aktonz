@@ -1115,13 +1115,37 @@ jobs:
           AD_HASH=${ADMIN_HASH:-}
           HP_SIZE=${HOMEPAGE_SIZE:-0}
           AD_SIZE=${ADMIN_SIZE:-0}
+          # Derive config path (root or parent) for WP_CACHE counting
+          ROOT_CFG="$HOSTINGER_PATH/wp-config.php"
+          PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
+          CFG_PATH=""
+          if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$ROOT_CFG' ]"; then CFG_PATH="$ROOT_CFG"; elif ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$PARENT_CFG' ]"; then CFG_PATH="$PARENT_CFG"; fi
+          WP_CACHE_TOTAL=0; WP_CACHE_TRUE=0; WP_CACHE_FALSE=0
+          if [ -n "$CFG_PATH" ]; then
+            WP_CACHE_LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -i 'define *[( ]*['\''\"\']WP_CACHE['\''\"\']' '$CFG_PATH' 2>/dev/null" || true)
+            if [ -n "$WP_CACHE_LINES" ]; then
+              WP_CACHE_TOTAL=$(printf '%s\n' "$WP_CACHE_LINES" | grep -c . || true)
+              WP_CACHE_TRUE=$(printf '%s\n' "$WP_CACHE_LINES" | grep -i "true" | grep -c . || true)
+              WP_CACHE_FALSE=$(printf '%s\n' "$WP_CACHE_LINES" | grep -i "false" | grep -c . || true)
+            fi
+          fi
+          echo "[deploy][wp_cache] total=$WP_CACHE_TOTAL true=$WP_CACHE_TRUE false=$WP_CACHE_FALSE cfg_path=$CFG_PATH"
+          # Retrieve active_plugins option (JSON array)
+          ACTIVE_PLUGINS_JSON=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -r 'error_reporting(E_ERROR); $p=getenv(\"WP_ROOT\")?:\"$HOSTINGER_PATH\"; $l=$p.\"/wp-load.php\"; if(!file_exists($l)){echo \"[]\"; exit;} include $l; $ap=get_option(\"active_plugins\"); if(!is_array($ap)){$ap=[];} echo json_encode(array_values($ap));'" 2>/dev/null || echo '[]')
+          case "$ACTIVE_PLUGINS_JSON" in 
+            \[*\]) : ;; # looks like JSON array
+            *) ACTIVE_PLUGINS_JSON='[]';;
+          esac
+          ACTIVE_PLUGINS_COUNT=$(printf '%s' "$ACTIVE_PLUGINS_JSON" | jq 'length' 2>/dev/null || echo 0)
+          ACTIVE_PLUGINS_HASH=$(printf '%s' "$ACTIVE_PLUGINS_JSON" | sha256sum | awk '{print $1}')
+          echo "[deploy][plugins] active_count=$ACTIVE_PLUGINS_COUNT hash=$ACTIVE_PLUGINS_HASH"
           if [ -n "$CFG_RECOVER_SRC_SAFE" ]; then RECOVER_SRC_JSON="\"$CFG_RECOVER_SRC_SAFE\""; else RECOVER_SRC_JSON="null"; fi
           DISABLED_COUNT=$(echo "$DISABLED_PLUGINS_JSON" | grep -o '"' | wc -l | awk '{print $1/2}')
           CM_HASH=${CODE_MANIFEST_HASH:-}
           PLUG_JSON=${PLUGIN_HASHES_JSON:-[]}
             THEME_JSON=${THEME_HASHES_JSON:-[]}
-          JSON_CORE=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s,"code_manifest_hash":"%s","plugin_hashes":%s,"theme_hashes":%s' \
-            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS" "$CM_HASH" "$PLUG_JSON" "$THEME_JSON")
+          JSON_CORE=$(printf '{"commit":"%s","short_sha":"%s","branch":"%s","deployed_at":"%s","source":"github_actions","cfg_lines":%s,"cfg_recovered":%s,"cfg_recovered_from":%s,"disabled_plugins":%s,"disabled_plugins_count":%s,"litespeed_disabled_variants":%s,"code_manifest_hash":"%s","plugin_hashes":%s,"theme_hashes":%s,"wp_cache_total_defines":%s,"wp_cache_true_defines":%s,"wp_cache_false_defines":%s,"active_plugins":%s,"active_plugins_count":%s,"active_plugins_hash":"%s"' \
+            "$COMMIT" "$SHORT" "$GITHUB_REF_NAME" "$STAMP" "$CFG_LINES_SAFE" "$CFG_RECOVERED_SAFE" "$RECOVER_SRC_JSON" "$DISABLED_PLUGINS_JSON" "$DISABLED_COUNT" "$LSP_VARIANTS" "$CM_HASH" "$PLUG_JSON" "$THEME_JSON" "$WP_CACHE_TOTAL" "$WP_CACHE_TRUE" "$WP_CACHE_FALSE" "$ACTIVE_PLUGINS_JSON" "$ACTIVE_PLUGINS_COUNT" "$ACTIVE_PLUGINS_HASH")
           if [ -n "$HP_HASH" ]; then JSON_CORE+=$(printf ',"homepage_hash":"%s","homepage_size":%s' "$HP_HASH" "$HP_SIZE"); fi
           if [ -n "$AD_HASH" ]; then JSON_CORE+=$(printf ',"admin_hash":"%s","admin_size":%s' "$AD_HASH" "$AD_SIZE"); fi
           JSON="$JSON_CORE}"
@@ -1275,6 +1299,47 @@ jobs:
           name: post-run-validation
           path: validation-summary.json
           if-no-files-found: error
+          retention-days: 7
+
+      - name: Always capture recent logs if non-200 or diagnostics requested
+        if: ${{ always() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set +e
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//'); HOSTINGER_PATH="$CLEAN_PATH"
+          STATUS_OK=1
+          for code in "$HOMEPAGE_STATUS" "$ADMIN_STATUS"; do
+            [ -z "$code" ] && continue
+            if [ "$code" != "200" ]; then STATUS_OK=0; fi
+          done
+          if [ "$STATUS_OK" -eq 1 ] && [ "${{ github.event.inputs.debug_logs }}" != "true" ]; then
+            echo "[logs] All primary endpoints 200 and debug_logs not requested; skipping log capture"; exit 0; fi
+            echo "[logs] Capturing logs (status_ok=$STATUS_OK debug_input=${{ github.event.inputs.debug_logs }})"
+          for logf in debug.log php-error.log error_log; do
+            if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -f '$HOSTINGER_PATH/wp-content/$logf' ]"; then
+              ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "tail -n 250 '$HOSTINGER_PATH/wp-content/$logf'" > logs_$logf 2>/dev/null || true
+              echo "[logs] Saved logs_$logf";
+            fi
+          done
+          if [ -f logs_debug.log ] || [ -f logs_php-error.log ] || [ -f logs_error_log ]; then
+            ls -l logs_* | sed 's/^/[logs][files]/'
+          else
+            echo "[logs] No log files captured"
+          fi
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+          HOMEPAGE_STATUS: ${{ env.HOMEPAGE_STATUS }}
+          ADMIN_STATUS: ${{ env.ADMIN_STATUS }}
+
+      - name: Upload captured logs
+        if: ${{ always() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-logs
+          path: logs_*
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: On-failure diagnostics (tail logs & deep probe)

@@ -15,6 +15,10 @@ on:
         description: "Enable WP_DEBUG temporarily (true/false)"
         required: false
         default: "false"
+      safe_mode:
+        description: "Activate temporary safe mode (true/false)"
+        required: false
+        default: "false"
 
 jobs:
   diag:
@@ -35,13 +39,21 @@ jobs:
           DEPTH: ${{ github.event.inputs.depth }}
           EPS: ${{ github.event.inputs.endpoints }}
           DEBUG_FLAG: ${{ github.event.inputs.debug }}
+          SAFE_MODE: ${{ github.event.inputs.safe_mode }}
           PROD_URL: ${{ secrets.PRODUCTION_URL }}
         shell: bash
         run: |
           set -euo pipefail
           DEPTH=${DEPTH:-200}
           ROOT=$(printf '%s' "$ROOT" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
-          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG"
+          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG safe_mode=$SAFE_MODE"
+          if [ "${SAFE_MODE,,}" = "true" ]; then
+            echo "[diag] Activating safe mode (plugin allowlist)"
+            LOCAL_SCRIPT="safe_mode.sh"
+            if [ -f "scripts/safe_mode.sh" ]; then LOCAL_SCRIPT="scripts/safe_mode.sh"; fi
+            scp -P "$PORT" "$LOCAL_SCRIPT" "$USER@$HOST:$ROOT/ci-safe-mode.sh" 2>/dev/null || true
+            ssh -p "$PORT" "$USER@$HOST" "chmod +x '$ROOT/ci-safe-mode.sh' && WP_ROOT='$ROOT' bash '$ROOT/ci-safe-mode.sh'" || echo "[diag][warn] safe mode activation failed"
+          fi
           CFG="$ROOT/wp-config.php"
           if ssh -p "$PORT" "$USER@$HOST" "[ -f '$CFG' ]"; then
             echo "[diag] wp-config.php head (20)"; ssh -p "$PORT" "$USER@$HOST" "head -n 20 '$CFG'" | sed 's/^/[cfg][head]/'
@@ -78,6 +90,10 @@ jobs:
           done
           if ssh -p "$PORT" "$USER@$HOST" "command -v php >/dev/null"; then
             echo "[diag] Active plugins option"; ssh -p "$PORT" "$USER@$HOST" "php -r 'include \"$ROOT/wp-load.php\"; echo json_encode(get_option(\"active_plugins\"));'" 2>/dev/null | sed 's/^/[active_plugins]/' || true
+          fi
+          if [ "${SAFE_MODE,,}" = "true" ]; then
+            echo "[diag] Safe mode restore (leave site unchanged after capture)"
+            ssh -p "$PORT" "$USER@$HOST" "WP_ROOT='$ROOT' bash '$ROOT/ci-safe-mode.sh' --restore" || echo "[diag][warn] safe mode restore failed"
           fi
       - name: Archive diagnostics artifacts
         uses: actions/upload-artifact@v4
