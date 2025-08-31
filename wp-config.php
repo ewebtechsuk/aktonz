@@ -47,6 +47,10 @@ $table_prefix = getenv('TABLE_PREFIX') ?: 'wp_';
 
 // For developers: WordPress debugging mode.
 define('WP_DEBUG', false);
+// Deployment workflow expects exactly one WP_CACHE define forcing false (for stability during audits)
+if (!defined('WP_CACHE')) {
+    define('WP_CACHE', false);
+}
 
 /* That's all, stop editing! Happy publishing. */
 
