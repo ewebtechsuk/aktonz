@@ -33,3 +33,6 @@ wp-cli.phar
 offline-cache/
 wp-lite/
 .env.deploy
+.codex-admin.txt
+.codex-status.json
+.codex-ready
