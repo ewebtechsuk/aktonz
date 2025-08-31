@@ -101,19 +101,7 @@ jobs:
           fi
           if [ "$CAN_SSH" = 1 ]; then
             echo "[diag] DB connectivity test"
-            TMP_DBTEST=$(mktemp)
-            cat > "$TMP_DBTEST" <<'EOF'
-            <?php
-            $root = $argv[1];
-            @include $root.'/wp-config.php';
-            if(!defined('DB_HOST')) { echo "[db][error] wp-config not loaded\n"; exit(1); }
-            $d=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME);
-            if(!$d){ echo "[db][error] ".mysqli_connect_error()."\n"; }
-            else { echo "[db] connect ok\n"; mysqli_close($d); }
-            EOF
-            scp -P "$PORT" "$TMP_DBTEST" "$USER@$HOST:$ROOT/ci-dbtest.php" 2>/dev/null || true
-            rm -f "$TMP_DBTEST"
-            ssh -p "$PORT" "$USER@$HOST" "php '$ROOT/ci-dbtest.php' '$ROOT' || true; rm -f '$ROOT/ci-dbtest.php'" 2>/dev/null || echo "[diag][warn] DB test command failed"
+            ssh -p "$PORT" "$USER@$HOST" "php -r \"include '$ROOT/wp-config.php'; \\\$d=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); if(!\\\$d){echo '[db][error] '.mysqli_connect_error().\\\"\\n\\\";} else {echo '[db] connect ok\\n'; mysqli_close(\\\$d);} \"" 2>/dev/null || echo "[diag][warn] DB test command failed"
             CFG="$ROOT/wp-config.php"
             if ssh -p "$PORT" "$USER@$HOST" "[ -f '$CFG' ]"; then
               echo "[diag] wp-config.php head (20)"; ssh -p "$PORT" "$USER@$HOST" "head -n 20 '$CFG'" | sed 's/^/[cfg][head]/'
