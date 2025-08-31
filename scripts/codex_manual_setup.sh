@@ -45,7 +45,12 @@ need(){ command -v "$1" >/dev/null 2>&1 || fail "Need $1"; }
 DB_NAME=${DB_NAME:-${DB_NAME_ENV:-${DB_NAME_DEFAULT:-wpdb}}}
 DB_USER=${DB_USER:-${DB_USER_ENV:-wpuser}}
 DB_PASS=${DB_PASS:-${DB_PASSWORD:-wpsecret}}
-DB_HOST=${DB_HOST:-${DB_HOST_ENV:-localhost}}
+DB_HOST=${DB_HOST:-${WORDPRESS_DB_HOST:-${DB_HOST_ENV:-localhost}}}
+DB_PORT_ENV=${DB_PORT:-}
+if [ -n "$DB_PORT_ENV" ] && ! echo "$DB_HOST" | grep -q ':'; then
+  # Append port if host lacks one
+  DB_HOST="${DB_HOST}:${DB_PORT_ENV}"
+fi
 PREFIX=${PREFIX:-${TABLE_PREFIX:-wp_}}
 
 # Admin + site fallbacks (multiple possible env names for convenience)
@@ -135,6 +140,15 @@ if ! $WP core is-installed >/dev/null 2>&1; then
       CORE_INSTALLED=1
     else
       log "Install command failed" >&2
+      # If DB host looks like localhost:PORT and fails, try common docker service host fallback
+      if echo "$DB_HOST" | grep -q 'localhost:'; then
+        ALT_HOST="db:3306"
+        log "Retrying install with DB_HOST fallback $ALT_HOST"
+        $WP config set DB_HOST "$ALT_HOST" --type=constant --quiet || true
+        if $WP core install --url="$URL" --title="$TITLE" --admin_user="$ADMIN_USER" --admin_password="$ADMIN_PASS" --admin_email="$ADMIN_EMAIL"; then
+          CORE_INSTALLED=1
+        fi
+      fi
     fi
   else
     log "Skipping install (missing URL or admin creds)"
