@@ -58,6 +58,13 @@ need php
 need curl
 need awk
 
+# Root detection (Codex / CI containers often run as root); safely append --allow-root
+IS_ROOT=0
+if [ "$(id -u)" = "0" ]; then
+  IS_ROOT=1
+  log "Running as root; wp-cli will use --allow-root"
+fi
+
 # Acquire wp-cli if missing
 if ! command -v wp >/dev/null 2>&1; then
   if [ ! -f wp-cli.phar ]; then
@@ -69,6 +76,9 @@ if ! command -v wp >/dev/null 2>&1; then
 else
   WP="wp"
 fi
+
+# Append --allow-root automatically if root
+[ $IS_ROOT -eq 1 ] && WP="$WP --allow-root"
 
 # Generate .env if absent
 if [ ! -f .env ]; then
@@ -109,7 +119,9 @@ if [ ! -f wp-config.php ] || [ $FORCE -eq 1 ]; then
 fi
 
 # Install if not installed and URL/admin provided
+CORE_INSTALLED=1
 if ! $WP core is-installed >/dev/null 2>&1; then
+  CORE_INSTALLED=0
   if [ -n "$URL" ] && [ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ] && [ -n "$ADMIN_EMAIL" ]; then
     log "Running core install"
     $WP core install --url="$URL" --title="$TITLE" \
@@ -121,13 +133,13 @@ else
   log "WordPress already installed"
 fi
 
-# Ensure search & home URLs match if URL provided
-if [ -n "$URL" ]; then
+# Ensure search & home URLs match if URL provided AND core installed
+if [ -n "$URL" ] && [ $CORE_INSTALLED -eq 1 ]; then
   CURR=$($WP option get siteurl 2>/dev/null || echo '')
   if [ "$CURR" != "$URL" ]; then
     log "Updating siteurl/home to $URL"
-    $WP option update siteurl "$URL" >/dev/null
-    $WP option update home "$URL" >/dev/null
+    $WP option update siteurl "$URL" >/dev/null || log "(warn) siteurl update failed"
+    $WP option update home "$URL" >/dev/null || log "(warn) home update failed"
   fi
 fi
 
