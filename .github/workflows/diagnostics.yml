@@ -31,6 +31,14 @@ on:
         description: "Force disable (rename) LiteSpeed Cache plugin regardless of signature (true/false)"
         required: false
         default: "false"
+      enforce_status_check:
+        description: "Fail workflow if endpoints return unexpected HTTP codes (true/false)"
+        required: false
+        default: "true"
+      allowed_redirect_endpoints:
+        description: "Comma-separated endpoints allowed to return 3xx (login redirects)"
+        required: false
+        default: "/wp-admin/"
       root_path_override:
         description: "(Optional) Explicit remote WP root path overriding secret (e.g. /home/USER/domains/example.com/public_html)"
         required: false
@@ -79,13 +87,15 @@ jobs:
           RETAIN_SAFE_MODE: ${{ github.event.inputs.retain_safe_mode }}
           AUTO_DISABLE_LSCACHE: ${{ github.event.inputs.auto_disable_litespeed }}
           FORCE_DISABLE_LSCACHE: ${{ github.event.inputs.force_disable_litespeed }}
+          ENFORCE_STATUS_CHECK: ${{ github.event.inputs.enforce_status_check }}
+          ALLOWED_REDIRECT_ENDPOINTS: ${{ github.event.inputs.allowed_redirect_endpoints }}
           PROD_URL: ${{ secrets.PRODUCTION_URL }}
         shell: bash
         run: |
           set -euo pipefail
           DEPTH=${DEPTH:-200}
           ROOT=$(printf '%s' "$ROOT" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
-          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG safe_mode=$SAFE_MODE retain=$RETAIN_SAFE_MODE auto_disable_lscache=$AUTO_DISABLE_LSCACHE force_disable_lscache=$FORCE_DISABLE_LSCACHE"
+          echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG safe_mode=$SAFE_MODE retain=$RETAIN_SAFE_MODE auto_disable_lscache=$AUTO_DISABLE_LSCACHE force_disable_lscache=$FORCE_DISABLE_LSCACHE enforce_status_check=$ENFORCE_STATUS_CHECK allowed_redirects=$ALLOWED_REDIRECT_ENDPOINTS"
           CAN_SSH=0
           if [ -n "${HOST:-}" ] && [ -n "${USER:-}" ]; then
             if ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -p "$PORT" "$USER@$HOST" "echo ok" 2>/dev/null | grep -q '^ok'; then
@@ -147,6 +157,7 @@ jobs:
             fi
           fi
           IFS=',' read -r -a ARR <<<"${EPS:-/,/wp-admin/,/wp-json/}"
+          : > diag_endpoint_codes.txt
           for ep in "${ARR[@]}"; do
             ep=$(echo "$ep" | xargs)
             [ -z "$ep" ] && continue
@@ -156,6 +167,9 @@ jobs:
             echo "[diag] Curling $ep -> $URL";
             curl -s -S -D "headers${safe}.txt" -o "body${safe}.html" -w "\n[diag] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "$URL" || echo "[diag][warn] curl failed $ep"
             head -n 60 "body${safe}.html" | sed "s/^/[diag][body${safe}]/" || true
+            # Extract status code from headers file (last HTTP line if multiple redirects)
+            code=$(grep -E '^HTTP/' "headers${safe}.txt" | tail -n1 | awk '{print $2}')
+            echo -e "${ep}\t${code}" >> diag_endpoint_codes.txt
           done
           # If we auto-disabled LiteSpeed above, re-curl primary endpoint to see immediate effect
           if [ "$LSCACHE_AUTO_DISABLED" = 1 ]; then
@@ -185,6 +199,25 @@ jobs:
             elif [ "${SAFE_MODE,,}" = "true" ] && [ "${RETAIN_SAFE_MODE,,}" = "true" ]; then
               echo "[diag] Retaining safe mode (no restore)"
             fi
+            # Build human-readable and JSON summaries
+            SUMMARY_TXT="diag_summary.txt"
+            SUMMARY_JSON="diag_summary.json"
+            {
+              echo "lscache_auto_disabled=$LSCACHE_AUTO_DISABLED"
+              echo "db_auth_errors=$DB_AUTH_ERRS"
+              echo "endpoints:"
+              cat diag_endpoint_codes.txt | sed 's/^/  /'
+            } > "$SUMMARY_TXT"
+            # JSON assembly (simple)
+            {
+              echo '{'
+              echo "  \"lscache_auto_disabled\": $LSCACHE_AUTO_DISABLED,"
+              echo "  \"db_auth_errors\": $DB_AUTH_ERRS,"
+              echo "  \"endpoints\": ["
+              awk -F"\t" 'NR>1{print ","}{printf "    {\"endpoint\": \""$1"\", \"code\": "$2"}"}' diag_endpoint_codes.txt | sed '1s/^,//'
+              echo "  ]"
+              echo '}'
+            } > "$SUMMARY_JSON"
             echo "[diag][summary] lscache_auto_disabled=$LSCACHE_AUTO_DISABLED db_auth_errors=$DB_AUTH_ERRS"
           else
             echo "[diag][info] Skipped remote log and plugin capture due to SSH unavailability"
@@ -196,5 +229,44 @@ jobs:
           path: |
             *body*.html
             *headers*.txt
+            diag_endpoint_codes.txt
+            diag_summary.txt
+            diag_summary.json
           if-no-files-found: ignore
           retention-days: 5
+      - name: Evaluate endpoint status codes
+        if: always()
+        shell: bash
+        env:
+          ENFORCE_STATUS_CHECK: ${{ github.event.inputs.enforce_status_check }}
+          ALLOWED_REDIRECT_ENDPOINTS: ${{ github.event.inputs.allowed_redirect_endpoints }}
+        run: |
+          set -euo pipefail
+          if [ ! -f diag_endpoint_codes.txt ]; then echo "[eval][warn] No endpoint codes file found"; exit 0; fi
+          IFS=',' read -r -a ALLOWED <<<"${ALLOWED_REDIRECT_ENDPOINTS:-}" || true
+          failures=0
+          while IFS=$'\t' read -r ep code; do
+            [ -z "${ep}" ] && continue
+            ok=0
+            if [ "$code" = "200" ]; then
+              ok=1
+            else
+              # Allow 3xx for specified endpoints
+              if echo "$code" | grep -qE '^(301|302|303|307|308)$'; then
+                for a in "${ALLOWED[@]}"; do
+                  if [ "$ep" = "$a" ]; then ok=1; break; fi
+                done
+              fi
+            fi
+            if [ $ok -ne 1 ]; then
+              echo "[eval][fail] Unexpected status $code for $ep"
+              failures=$((failures+1))
+            else
+              echo "[eval][ok] $ep -> $code"
+            fi
+          done < diag_endpoint_codes.txt
+          echo "[eval] failures=$failures enforce=$ENFORCE_STATUS_CHECK"
+          if [ "${ENFORCE_STATUS_CHECK,,}" = "true" ] && [ $failures -gt 0 ]; then
+            echo "[eval] Failing job due to unexpected endpoint statuses" >&2
+            exit 1
+          fi
