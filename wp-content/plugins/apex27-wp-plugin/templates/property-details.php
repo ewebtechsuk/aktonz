@@ -108,6 +108,26 @@ $property_images = $details->images ?? [];
     padding: 1.5rem;
     margin-bottom: 2rem;
 }
+.property-media-tabs .media-tabs-nav {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+.property-media-tabs .media-tab-btn {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+    cursor: pointer;
+    font-weight: 600;
+}
+.property-media-tabs .media-tab-btn.active {
+    background: #007bff;
+    color: #fff;
+    border-color: #007bff;
+}
+.media-tab-content { display: none; }
+.media-tab-content.active { display: block; }
 @media (max-width: 991px) {
     .sticky-sidebar { position: static; top: auto; }
 }
@@ -150,16 +170,35 @@ $property_images = $details->images ?? [];
         </div>
         <div class="row g-4">
             <div class="col-lg-8">
-                <?php if($property_images) { ?>
-                <div class="mb-4">
-                    <img id="mainPropertyImage" class="property-main-image" src="<?=htmlspecialchars($property_images[0]->url)?>" alt="<?=htmlspecialchars($property_images[0]->caption ?? $details->displayAddress)?>" />
-                    <div class="property-thumbnails mt-2">
-                        <?php foreach($property_images as $idx => $img) { ?>
-                            <img class="property-thumbnail<?=$idx === 0 ? ' active' : ''?>" src="<?=htmlspecialchars($img->url)?>" alt="<?=htmlspecialchars($img->caption ?? $details->displayAddress)?>" data-full="<?=htmlspecialchars($img->url)?>" data-idx="<?=$idx?>" tabindex="0" />
+                <div class="property-media-tabs mb-4">
+                    <div class="media-tabs-nav">
+                        <button class="media-tab-btn active" data-target="photos">Photos</button>
+                        <?php if($details->floorplans) { ?>
+                        <button class="media-tab-btn" data-target="floorplan">Floorplan</button>
+                        <?php } ?>
+                        <button class="media-tab-btn" data-target="map">Location</button>
+                    </div>
+                    <?php if($property_images) { ?>
+                    <div id="tab-photos" class="media-tab-content active">
+                        <img id="mainPropertyImage" class="property-main-image" src="<?=htmlspecialchars($property_images[0]->url)?>" alt="<?=htmlspecialchars($property_images[0]->caption ?? $details->displayAddress)?>" />
+                        <div class="property-thumbnails mt-2">
+                            <?php foreach($property_images as $idx => $img) { ?>
+                                <img class="property-thumbnail<?=$idx === 0 ? ' active' : ''?>" src="<?=htmlspecialchars($img->url)?>" alt="<?=htmlspecialchars($img->caption ?? $details->displayAddress)?>" data-full="<?=htmlspecialchars($img->url)?>" data-idx="<?=$idx?>" tabindex="0" />
+                            <?php } ?>
+                        </div>
+                    </div>
+                    <?php } ?>
+                    <?php if($details->floorplans) { ?>
+                    <div id="tab-floorplan" class="media-tab-content">
+                        <?php foreach($details->floorplans as $plan) { ?>
+                            <img class="w-100 mb-3" src="<?=htmlspecialchars($plan->url)?>" alt="<?=htmlspecialchars($plan->caption ?? 'Floorplan')?>" />
                         <?php } ?>
                     </div>
+                    <?php } ?>
+                    <div id="tab-map" class="media-tab-content">
+                        <iframe width="100%" height="400" style="border:0;" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="https://www.google.com/maps?q=<?=urlencode($details->displayAddress)?>&output=embed"></iframe>
+                    </div>
                 </div>
-                <?php } ?>
                 <div class="property-description">
                     <h4 class="text-brand mb-3" dir="auto"><?=htmlspecialchars(__("Description", $text_domain))?></h4>
                     <?php if($details->description) { ?>
@@ -172,13 +211,6 @@ $property_images = $details->images ?? [];
                     <?php } ?>
                 </div>
                 <div class="row g-3 mb-4">
-                    <?php if($details->floorplans) { ?>
-                    <div class="col-12 col-md-6">
-                        <a href="#property-details-floorplans" class="btn btn-outline-brand w-100" data-type="floorplans">
-                            <i class="fa fa-ruler-combined"></i> <?=htmlspecialchars(__("Floorplans", $text_domain))?>
-                        </a>
-                    </div>
-                    <?php } ?>
                     <?php if($details->epcs) { ?>
                     <div class="col-12 col-md-6">
                         <a href="#property-details-epcs" class="btn btn-outline-brand w-100" data-type="epcs">
@@ -288,6 +320,25 @@ function closeViewingForm() {
         container.appendChild(slotDiv);
         slotCount++;
         if(slotCount >= 3) this.disabled = true;
+    });
+})();
+(function() {
+    var buttons = document.querySelectorAll('.media-tab-btn');
+    var contents = {
+        photos: document.getElementById('tab-photos'),
+        floorplan: document.getElementById('tab-floorplan'),
+        map: document.getElementById('tab-map')
+    };
+    buttons.forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var target = this.getAttribute('data-target');
+            buttons.forEach(function(b) { b.classList.remove('active'); });
+            for (var key in contents) {
+                if(contents[key]) contents[key].classList.remove('active');
+            }
+            this.classList.add('active');
+            if(contents[target]) contents[target].classList.add('active');
+        });
     });
 })();
 // Property image thumbnail click handler
