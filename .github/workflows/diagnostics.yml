@@ -31,6 +31,24 @@ jobs:
         uses: webfactory/ssh-agent@v0.9.0
         with:
             ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+      - name: Add remote host key
+        if: ${{ secrets.HOSTINGER_SSH_HOST != '' }}
+        shell: bash
+        env:
+          HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          touch ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          host_only=${HOST%%:*}
+          if ssh-keygen -F "$host_only" >/dev/null 2>&1; then
+            echo "[diag][prep] Host key already present for $host_only"
+          else
+            echo "[diag][prep] Scanning and adding host key for $host_only port ${PORT:-22}"
+            ssh-keyscan -p "${PORT:-22}" -t rsa,ecdsa,ed25519 "$host_only" 2>/dev/null >> ~/.ssh/known_hosts || echo "[diag][warn] ssh-keyscan failed (continuing)"
+          fi
       - name: Collect diagnostics
         env:
           HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
@@ -48,31 +66,44 @@ jobs:
           DEPTH=${DEPTH:-200}
           ROOT=$(printf '%s' "$ROOT" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           echo "[diag] Root=$ROOT depth=$DEPTH debug=$DEBUG_FLAG safe_mode=$SAFE_MODE"
-          if [ "${SAFE_MODE,,}" = "true" ]; then
+          CAN_SSH=0
+          if [ -n "${HOST:-}" ] && [ -n "${USER:-}" ]; then
+            if ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -p "$PORT" "$USER@$HOST" "echo ok" 2>/dev/null | grep -q '^ok'; then
+              CAN_SSH=1
+              echo "[diag] SSH connectivity verified"
+            else
+              echo "[diag][warn] SSH connectivity test failed (host key or auth). Remote-only data will be skipped."
+            fi
+          else
+            echo "[diag][warn] HOST/USER not set; skipping remote capture"
+          fi
+          if [ "$CAN_SSH" = 1 ] && [ "${SAFE_MODE,,}" = "true" ]; then
             echo "[diag] Activating safe mode (plugin allowlist)"
             LOCAL_SCRIPT="safe_mode.sh"
             if [ -f "scripts/safe_mode.sh" ]; then LOCAL_SCRIPT="scripts/safe_mode.sh"; fi
             scp -P "$PORT" "$LOCAL_SCRIPT" "$USER@$HOST:$ROOT/ci-safe-mode.sh" 2>/dev/null || true
             ssh -p "$PORT" "$USER@$HOST" "chmod +x '$ROOT/ci-safe-mode.sh' && WP_ROOT='$ROOT' bash '$ROOT/ci-safe-mode.sh'" || echo "[diag][warn] safe mode activation failed"
           fi
-          CFG="$ROOT/wp-config.php"
-          if ssh -p "$PORT" "$USER@$HOST" "[ -f '$CFG' ]"; then
-            echo "[diag] wp-config.php head (20)"; ssh -p "$PORT" "$USER@$HOST" "head -n 20 '$CFG'" | sed 's/^/[cfg][head]/'
-            echo "[diag] wp-config.php WP_CACHE lines"; ssh -p "$PORT" "$USER@$HOST" "grep -n -i WP_CACHE '$CFG' 2>/dev/null" | sed 's/^/[cfg][cache]/' || true
-          else
-            echo "[diag][warn] wp-config.php not found"
-          fi
-          if [ "${DEBUG_FLAG,,}" = "true" ]; then
-            echo "[diag] Enabling runtime WP_DEBUG via mu-plugin"
-            MU_DIR="$ROOT/wp-content/mu-plugins"; TMP="ci-debug-diag.php";
-            ssh -p "$PORT" "$USER@$HOST" "mkdir -p '$MU_DIR'"
-            printf "%s\n" "<?php" \
-              "if (!defined('WP_DEBUG')) define('WP_DEBUG', true);" \
-              "if (!defined('WP_DEBUG_LOG')) define('WP_DEBUG_LOG', true);" \
-              "if (!defined('WP_DEBUG_DISPLAY')) define('WP_DEBUG_DISPLAY', false);" \
-              "error_log('[ci-diag] temporary debug mu-plugin active');" > "$TMP"
-            scp -P "$PORT" "$TMP" "$USER@$HOST:$MU_DIR/zzz-ci-diag-debug.php" 2>/dev/null || true
-            rm -f "$TMP"
+          if [ "$CAN_SSH" = 1 ]; then
+            CFG="$ROOT/wp-config.php"
+            if ssh -p "$PORT" "$USER@$HOST" "[ -f '$CFG' ]"; then
+              echo "[diag] wp-config.php head (20)"; ssh -p "$PORT" "$USER@$HOST" "head -n 20 '$CFG'" | sed 's/^/[cfg][head]/'
+              echo "[diag] wp-config.php WP_CACHE lines"; ssh -p "$PORT" "$USER@$HOST" "grep -n -i WP_CACHE '$CFG' 2>/dev/null" | sed 's/^/[cfg][cache]/' || true
+            else
+              echo "[diag][warn] wp-config.php not found"
+            fi
+            if [ "${DEBUG_FLAG,,}" = "true" ]; then
+              echo "[diag] Enabling runtime WP_DEBUG via mu-plugin"
+              MU_DIR="$ROOT/wp-content/mu-plugins"; TMP="ci-debug-diag.php";
+              ssh -p "$PORT" "$USER@$HOST" "mkdir -p '$MU_DIR'"
+              printf "%s\n" "<?php" \
+                "if (!defined('WP_DEBUG')) define('WP_DEBUG', true);" \
+                "if (!defined('WP_DEBUG_LOG')) define('WP_DEBUG_LOG', true);" \
+                "if (!defined('WP_DEBUG_DISPLAY')) define('WP_DEBUG_DISPLAY', false);" \
+                "error_log('[ci-diag] temporary debug mu-plugin active');" > "$TMP"
+              scp -P "$PORT" "$TMP" "$USER@$HOST:$MU_DIR/zzz-ci-diag-debug.php" 2>/dev/null || true
+              rm -f "$TMP"
+            fi
           fi
           IFS=',' read -r -a ARR <<<"${EPS:-/,/wp-admin/,/wp-json/}"
           for ep in "${ARR[@]}"; do
@@ -84,17 +115,21 @@ jobs:
             curl -s -S -D "headers${safe}.txt" -o "body${safe}.html" -w "\n[diag] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "$URL" || echo "[diag][warn] curl failed $ep"
             head -n 60 "body${safe}.html" | sed "s/^/[diag][body${safe}]/" || true
           done
-          for logf in debug.log php-error.log error_log fatal-requests.log; do
-            if ssh -p "$PORT" "$USER@$HOST" "[ -f '$ROOT/wp-content/$logf' ]"; then
-              echo "[diag] Tail $logf"; ssh -p "$PORT" "$USER@$HOST" "tail -n $DEPTH '$ROOT/wp-content/$logf'" | sed "s/^/[log:$logf]/" || true
+          if [ "$CAN_SSH" = 1 ]; then
+            for logf in debug.log php-error.log error_log fatal-requests.log; do
+              if ssh -p "$PORT" "$USER@$HOST" "[ -f '$ROOT/wp-content/$logf' ]"; then
+                echo "[diag] Tail $logf"; ssh -p "$PORT" "$USER@$HOST" "tail -n $DEPTH '$ROOT/wp-content/$logf'" | sed "s/^/[log:$logf]/" || true
+              fi
+            done
+            if ssh -p "$PORT" "$USER@$HOST" "command -v php >/dev/null"; then
+              echo "[diag] Active plugins option"; ssh -p "$PORT" "$USER@$HOST" "php -r 'include \"$ROOT/wp-load.php\"; echo json_encode(get_option(\"active_plugins\"));'" 2>/dev/null | sed 's/^/[active_plugins]/' || true
             fi
-          done
-          if ssh -p "$PORT" "$USER@$HOST" "command -v php >/dev/null"; then
-            echo "[diag] Active plugins option"; ssh -p "$PORT" "$USER@$HOST" "php -r 'include \"$ROOT/wp-load.php\"; echo json_encode(get_option(\"active_plugins\"));'" 2>/dev/null | sed 's/^/[active_plugins]/' || true
-          fi
-          if [ "${SAFE_MODE,,}" = "true" ]; then
-            echo "[diag] Safe mode restore (leave site unchanged after capture)"
-            ssh -p "$PORT" "$USER@$HOST" "WP_ROOT='$ROOT' bash '$ROOT/ci-safe-mode.sh' --restore" || echo "[diag][warn] safe mode restore failed"
+            if [ "${SAFE_MODE,,}" = "true" ]; then
+              echo "[diag] Safe mode restore (leave site unchanged after capture)"
+              ssh -p "$PORT" "$USER@$HOST" "WP_ROOT='$ROOT' bash '$ROOT/ci-safe-mode.sh' --restore" || echo "[diag][warn] safe mode restore failed"
+            fi
+          else
+            echo "[diag][info] Skipped remote log and plugin capture due to SSH unavailability"
           fi
       - name: Archive diagnostics artifacts
         uses: actions/upload-artifact@v4
