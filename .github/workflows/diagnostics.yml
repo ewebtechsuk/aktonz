@@ -31,6 +31,10 @@ on:
         description: "Force disable (rename) LiteSpeed Cache plugin regardless of signature (true/false)"
         required: false
         default: "false"
+      litespeed_fatal_window_minutes:
+        description: "Minutes window for considering LiteSpeed fatal signature 'fresh' (auto-disable only if within window)"
+        required: false
+        default: "15"
       enforce_status_check:
         description: "Fail workflow if endpoints return unexpected HTTP codes (true/false)"
         required: false
@@ -52,9 +56,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Setup SSH
+        # Added continue-on-error to prevent post-step cleanup bug ("file argument must be of type string") from failing job
+        # Disable public key logging to avoid triggering known issue in action post hook
+        continue-on-error: true
         uses: webfactory/ssh-agent@v0.9.0
         with:
-            ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          log-public-key: false
       - name: Add remote host key
         shell: bash
         env:
@@ -87,6 +95,7 @@ jobs:
           RETAIN_SAFE_MODE: ${{ github.event.inputs.retain_safe_mode }}
           AUTO_DISABLE_LSCACHE: ${{ github.event.inputs.auto_disable_litespeed }}
           FORCE_DISABLE_LSCACHE: ${{ github.event.inputs.force_disable_litespeed }}
+          FATAL_WINDOW_MIN: ${{ github.event.inputs.litespeed_fatal_window_minutes }}
           ENFORCE_STATUS_CHECK: ${{ github.event.inputs.enforce_status_check }}
           ALLOWED_REDIRECT_ENDPOINTS: ${{ github.event.inputs.allowed_redirect_endpoints }}
           PROD_URL: ${{ secrets.PRODUCTION_URL }}
@@ -139,6 +148,7 @@ jobs:
           fi
           # Early LiteSpeed force & fatal signature detection & auto-disable (before curls)
           LSCACHE_AUTO_DISABLED=0
+          LSCACHE_RECENT_FATAL=0
           if [ "$CAN_SSH" = 1 ] && [ "${FORCE_DISABLE_LSCACHE,,}" = "true" ]; then
             echo "[diag][auto][force] Force disabling LiteSpeed Cache plugin"
             ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/litespeed-cache' ]; then mv '$ROOT/wp-content/plugins/litespeed-cache' '$ROOT/wp-content/plugins/litespeed-cache.force-disabled' 2>/dev/null || true; fi"
@@ -151,16 +161,46 @@ jobs:
             fi
           fi
           if [ "$CAN_SSH" = 1 ] && [ "${AUTO_DISABLE_LSCACHE,,}" = "true" ]; then
-            if ssh -p "$PORT" "$USER@$HOST" "grep -q 'optimizer.cls.php:149' '$ROOT/wp-content/debug.log' 2>/dev/null"; then
-              echo "[diag][auto][pre] Detected LiteSpeed fatal signature pre-curl; attempting mitigation"
-              # Try wp-cli deactivate first (may fail if DB auth failing)
-              if ssh -p "$PORT" "$USER@$HOST" "command -v wp >/dev/null"; then
-                ssh -p "$PORT" "$USER@$HOST" "cd '$ROOT' && wp plugin deactivate litespeed-cache --path='$ROOT' --allow-root" || echo "[diag][auto][warn] wp-cli deactivate failed (may be DB issue)"
+            # Evaluate freshness of LiteSpeed fatal (optimizer.cls.php:149) by parsing timestamp of last occurrence in debug.log
+            LAST_SIG_LINE=$(ssh -p "$PORT" "$USER@$HOST" "grep 'optimizer.cls.php:149' '$ROOT/wp-content/debug.log' 2>/dev/null | tail -n 1" || true)
+            if [ -n "$LAST_SIG_LINE" ]; then
+              # Expected format like: [31-Aug-2025 06:12:34 UTC] PHP Fatal error ... optimizer.cls.php:149
+              SIG_TS=$(printf '%s' "$LAST_SIG_LINE" | sed -n "s/^\[\([0-9][0-9]-[A-Za-z][a-z][a-z]-[0-9]\{4\} [0-9][0-9]:[0-9][0-9]:[0-9][0-9]\) UTC\].*/\1/p")
+              NOW_EPOCH=$(date -u +%s)
+              # Sanitize window (digits only, default 15, min 1)
+              FW=${FATAL_WINDOW_MIN:-15}
+              case "$FW" in *[!0-9]*|"" ) FW=15;; esac
+              if [ "$FW" -le 0 ]; then FW=15; fi
+              WIN_SECS=$((FW * 60))
+              FRESH=0
+              AGE=-1
+              if [ -n "$SIG_TS" ]; then
+                SIG_EPOCH=$(date -u -d "$SIG_TS" +%s 2>/dev/null || echo 0)
+                if [ "$SIG_EPOCH" -gt 0 ]; then
+                  AGE=$((NOW_EPOCH - SIG_EPOCH))
+                  if [ "$AGE" -le "$WIN_SECS" ]; then
+                    FRESH=1
+                  fi
+                fi
               fi
-              # Rename plugin directory if still present
-              ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/litespeed-cache' ]; then mv '$ROOT/wp-content/plugins/litespeed-cache' '$ROOT/wp-content/plugins/litespeed-cache.auto-disabled' 2>/dev/null || true; fi"
-              LSCACHE_AUTO_DISABLED=1
+              echo "[diag][auto][sig] last_line_age_secs=$AGE window_secs=$WIN_SECS fresh=$FRESH"
+              if [ "$FRESH" = 1 ]; then
+                echo "[diag][auto][pre] Recent LiteSpeed fatal signature (<=${FW}m); attempting mitigation"
+                if ssh -p "$PORT" "$USER@$HOST" "command -v wp >/dev/null"; then
+                  ssh -p "$PORT" "$USER@$HOST" "cd '$ROOT' && wp plugin deactivate litespeed-cache --path='$ROOT' --allow-root" || echo "[diag][auto][warn] wp-cli deactivate failed (may be DB issue)"
+                fi
+                ssh -p "$PORT" "$USER@$HOST" "if [ -d '$ROOT/wp-content/plugins/litespeed-cache' ]; then mv '$ROOT/wp-content/plugins/litespeed-cache' '$ROOT/wp-content/plugins/litespeed-cache.auto-disabled' 2>/dev/null || true; fi"
+                LSCACHE_AUTO_DISABLED=1
+                LSCACHE_RECENT_FATAL=1
+              else
+                echo "[diag][auto][info] LiteSpeed fatal signature present but stale (> ${FW}m); no auto-disable"
+              fi
             fi
+          fi
+          # DB probe with latency & errno JSON
+          if [ "$CAN_SSH" = 1 ]; then
+            ssh -p "$PORT" "$USER@$HOST" "php -r 'include \"$ROOT/wp-config.php\"; $t0=microtime(true); $d=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); $lat=round((microtime(true)-$t0)*1000); if(!$d){echo json_encode([\"ok\"=>false,\"latency_ms\"=>$lat,\"errno\"=>mysqli_connect_errno(),\"error\"=>mysqli_connect_error()]);} else { $ver=@mysqli_get_server_info($d); mysqli_close($d); echo json_encode([\"ok\"=>true,\"latency_ms\"=>$lat,\"errno\"=>0,\"server_info\"=>$ver]); }' 2>/dev/null" > db_probe.json || echo '{}' > db_probe.json
+            echo "[diag][db_probe] $(cat db_probe.json)"
           fi
           IFS=',' read -r -a ARR <<<"${EPS:-/,/wp-admin/,/wp-json/}"
           : > diag_endpoint_codes.txt
@@ -171,7 +211,22 @@ jobs:
             # Derive a filesystem-safe token for artifact filenames (replace / and ?)
             safe=$(printf '%s' "$ep" | tr '/?' '_')
             echo "[diag] Curling $ep -> $URL";
-            curl -s -S -D "headers${safe}.txt" -o "body${safe}.html" -w "\n[diag] code=%{http_code} time=%{time_total}s size=%{size_download}B redirects=%{num_redirects}\n" "$URL" || echo "[diag][warn] curl failed $ep"
+            curl -s -S -D "headers${safe}.txt" -o "body${safe}.html" -w "code=%{http_code} time_total=%{time_total} time_namelookup=%{time_namelookup} time_connect=%{time_connect} time_appconnect=%{time_appconnect} time_pretransfer=%{time_pretransfer} time_starttransfer=%{time_starttransfer} size=%{size_download}B redirects=%{num_redirects} remote_ip=%{remote_ip}\n" "$URL" > "metrics${safe}.txt" || echo "[diag][warn] curl failed $ep"
+            # Build per-endpoint JSON metrics
+            if [ -f "metrics${safe}.txt" ]; then
+              code=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^code=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              t_total=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^time_total=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              t_name=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^time_namelookup=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              t_conn=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^time_connect=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              t_appc=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^time_appconnect=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              t_pre=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^time_pretransfer=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              t_start=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^time_starttransfer=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              sizeB=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^size=/){split($i,a,"=");gsub(/B$/,"",a[2]);print a[2]}}}' "metrics${safe}.txt")
+              redirects=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^redirects=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              rip=$(awk '{for(i=1;i<=NF;i++){if($i ~ /^remote_ip=/){split($i,a,"=");print a[2]}}}' "metrics${safe}.txt")
+              printf '{"endpoint":"%s","code":%s,"timings":{"namelookup":%s,"connect":%s,"appconnect":%s,"pretransfer":%s,"starttransfer":%s,"total":%s},"size_bytes":%s,"redirects":%s,"remote_ip":"%s"}' \
+                "$ep" "${code:-0}" "${t_name:-0}" "${t_conn:-0}" "${t_appc:-0}" "${t_pre:-0}" "${t_start:-0}" "${t_total:-0}" "${sizeB:-0}" "${redirects:-0}" "$rip" > "diag_http_${safe}.json" 2>/dev/null || true
+            fi
             head -n 60 "body${safe}.html" | sed "s/^/[diag][body${safe}]/" || true
             # Extract status code from headers file (last HTTP line if multiple redirects)
             code=$(grep -E '^HTTP/' "headers${safe}.txt" | tail -n1 | awk '{print $2}')
@@ -213,10 +268,23 @@ jobs:
               echo "endpoints:"
               sed 's/^/  /' diag_endpoint_codes.txt
             } > "$SUMMARY_TXT"
+            DB_PROBE_JSON=$(cat db_probe.json 2>/dev/null || echo '{}')
+            # Derive recommendation
+            RECOMMENDATION="none"
+            if awk -F'\t' 'NF>=2 { if($2 != 200) bad=1 } END { if(bad) exit 0; else exit 1 }' diag_endpoint_codes.txt; then
+              RECOMMENDATION="endpoints_fail"
+            elif [ "$DB_AUTH_ERRS" -gt 0 ] || grep -q '"ok":false' db_probe.json 2>/dev/null || grep -q '"errno":[1-9]' db_probe.json 2>/dev/null; then
+              RECOMMENDATION="review_db_auth"
+            elif [ "$LSCACHE_RECENT_FATAL" = 1 ]; then
+              RECOMMENDATION="recent_litespeed_fatal"
+            fi
             {
               echo '{'
               echo "  \"lscache_auto_disabled\": $LSCACHE_AUTO_DISABLED,"
+              echo "  \"litespeed_recent_fatal\": $LSCACHE_RECENT_FATAL,"
               echo "  \"db_auth_errors\": $DB_AUTH_ERRS,"
+              echo "  \"db_probe\": $DB_PROBE_JSON,"
+              echo "  \"recommendation\": \"$RECOMMENDATION\"," 
               echo "  \"endpoints\": ["
               first=1
               while IFS=$'\t' read -r ep code; do
@@ -226,10 +294,24 @@ jobs:
                 first=0
               done < diag_endpoint_codes.txt
               echo
+              echo "  ],"
+              echo "  \"endpoint_metrics\": ["
+              first=1
+              while IFS=$'\t' read -r ep code; do
+                [ -z "$ep" ] && continue
+                safe=$(printf '%s' "$ep" | tr '/?' '_')
+                if [ -f "diag_http_${safe}.json" ]; then
+                  if [ $first -eq 0 ]; then echo ","; fi
+                  sed 's/^/    /' "diag_http_${safe}.json"
+                  first=0
+                fi
+              done < diag_endpoint_codes.txt
+              echo
               echo "  ]"
               echo '}'
             } > "$SUMMARY_JSON"
             echo "[diag][summary] lscache_auto_disabled=$LSCACHE_AUTO_DISABLED db_auth_errors=$DB_AUTH_ERRS"
+            echo "recommendation=$RECOMMENDATION" >> "$SUMMARY_TXT"
           else
             echo "[diag][info] Skipped remote log and plugin capture due to SSH unavailability"
           fi
@@ -240,9 +322,12 @@ jobs:
           path: |
             *body*.html
             *headers*.txt
+            metrics*.txt
+            diag_http_*.json
             diag_endpoint_codes.txt
             diag_summary.txt
             diag_summary.json
+            db_probe.json
           if-no-files-found: ignore
           retention-days: 5
       - name: Evaluate endpoint status codes
