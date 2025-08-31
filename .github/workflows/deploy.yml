@@ -383,6 +383,20 @@ jobs:
               fi
             fi
           fi
+          # --- WP_CACHE NORMALIZATION (dedupe & enforce single forced false define) ---
+          echo "[cfg-guard] Normalizing WP_CACHE defines (dedupe + force false)"
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$CFG' ]; then \
+            TS=\$(date +%s); cp '$CFG' '$CFG.ci.precache.'\"$TS\"; \
+            BEFORE=\$(grep -i 'WP_CACHE' '$CFG' 2>/dev/null | wc -l || echo 0); \
+            awk 'BEGIN{IGNORECASE=1} /WP_CACHE/ {next} {print}' '$CFG' > '$CFG.ci.tmp' && mv '$CFG.ci.tmp' '$CFG'; \
+            printf '%s\n' '// Managed by CI: enforce single WP_CACHE false' 'if (!defined("WP_CACHE")) { define("WP_CACHE", false); }' >> '$CFG'; \
+            AFTER=\$(grep -i 'WP_CACHE' '$CFG' 2>/dev/null | wc -l || echo 0); \
+            echo '[cfg-guard][wp_cache] before='$BEFORE' after='$AFTER; \
+          else echo '[cfg-guard][wp_cache][warn] File missing (skip)'; fi" || echo "[cfg-guard][wp_cache][error] Remote normalization failed"
+          # Refresh metrics post-normalization
+          LINES=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "wc -l < '$CFG' 2>/dev/null" || echo 0)
+          SIZE=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "stat -c %s '$CFG' 2>/dev/null" || echo 0)
+          MD5=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "md5sum '$CFG' 2>/dev/null | awk '{print $1}'" || echo unknown)
           TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           MJSON_ITEMS=""
           for m in "${MISSING[@]}"; do
