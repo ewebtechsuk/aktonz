@@ -36,3 +36,4 @@ wp-lite/
 .codex-admin.txt
 .codex-status.json
 .codex-ready
+.codex-plugin-audit.json

@@ -6,10 +6,12 @@ set -eu
 
 DO_UPDATE=0
 OUTPUT_JSON=0
+DO_AUDIT=0
 for a in "$@"; do
   case "$a" in
     --update) DO_UPDATE=1 ;;
-    --json) OUTPUT_JSON=1 ;;
+  --json) OUTPUT_JSON=1 ;;
+  --audit-plugins) DO_AUDIT=1 ;;
     -h|--help)
       cat <<'EOF'
 Usage: sh scripts/maintenance_lite.sh [--update] [--json]
@@ -138,13 +140,31 @@ summary(){
   log " Offline cache: ${OFFLINE_VERIFY}";
   log " Status OK: ${STATUS_OK}";
   log " Duration: ${duration}s";
+  if [ $DO_AUDIT -eq 1 ]; then
+    if [ -x scripts/plugin_audit_combined.sh ]; then
+      if [ -d wp-content/plugins ]; then
+        log "Running plugin filesystem audit (no DB required)"
+        scripts/plugin_audit_combined.sh > .codex-plugin-audit.json || err "Plugin audit failed"
+        AUDIT_TOTAL=$(grep -o '"total":[0-9]*' .codex-plugin-audit.json 2>/dev/null | head -n1 | awk -F: '{print $2}' || echo 0)
+        log " Plugin audit total plugins: ${AUDIT_TOTAL}";
+      else
+        log " Plugin audit skipped (no wp-content/plugins)";
+      fi
+    else
+      err "plugin_audit_combined.sh not executable; skip audit"
+    fi
+  fi
 }
 
 summary
 
 if [ "$OUTPUT_JSON" -eq 1 ]; then
-  printf '{"core_version":"%s","http_code":"%s","http_time":"%s","core_update":%s,"plugin_updates":%s,"theme_updates":%s,"offline":"%s","ok":%s,"duration_s":%s}\n' \
-    "$CORE_VERSION" "$HTTP_CODE" "$HTTP_TIME" "$CORE_UPDATE" "$PLUGIN_UPDATES" "$THEME_UPDATES" "$OFFLINE_VERIFY" "$STATUS_OK" "$duration"
+  EXTRA=""
+  if [ $DO_AUDIT -eq 1 ] && [ -f .codex-plugin-audit.json ]; then
+    EXTRA=",\"plugin_audit\":true"
+  fi
+  printf '{"core_version":"%s","http_code":"%s","http_time":"%s","core_update":%s,"plugin_updates":%s,"theme_updates":%s,"offline":"%s","ok":%s,"duration_s":%s%s}"\n' \
+    "$CORE_VERSION" "$HTTP_CODE" "$HTTP_TIME" "$CORE_UPDATE" "$PLUGIN_UPDATES" "$THEME_UPDATES" "$OFFLINE_VERIFY" "$STATUS_OK" "$duration" "$EXTRA"
 fi
 
 exit $([ $STATUS_OK -eq 1 ] && echo 0 || echo 1)
