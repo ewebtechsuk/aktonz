@@ -991,11 +991,17 @@ jobs:
           NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           printf '{"commit":"%s","short":"%s","deployed_at":"%s","workflow_run":"%s","repo":"%s","ref":"%s"}\n' \
             "$GITHUB_SHA" "${GITHUB_SHA::7}" "$NOW" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_REF" > deploy-commit.json
-          echo "[heartbeat] Writing deployment marker to remote .deploy-commit.json"
-          scp -P "$HOSTINGER_SSH_PORT" deploy-commit.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH/.deploy-commit.json"
+          echo "[heartbeat] Writing deployment marker to remote (dot + public variants)"
+          # Dotfile (may be blocked by host security policies for direct HTTP access)
+          scp -P "$HOSTINGER_SSH_PORT" deploy-commit.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH/.deploy-commit.json" || echo "[heartbeat][warn] Failed to write dotfile marker"
+          # Public non-dot variant (intended for browser / curl access)
+          scp -P "$HOSTINGER_SSH_PORT" deploy-commit.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH/deploy-commit.json" || echo "[heartbeat][warn] Failed to write public deploy-commit.json"
+          # Uploads-based heartbeat (survives some docroot rewrites; nested path reduces chance of host blocking file)
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "mkdir -p '$HOSTINGER_PATH/wp-content/uploads/deploy'" || true
+          scp -P "$HOSTINGER_SSH_PORT" deploy-commit.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH/wp-content/uploads/deploy/heartbeat.json" || echo "[heartbeat][warn] Failed to write uploads heartbeat"
           REMOTE_INFO="$HOSTINGER_PATH/.deploy-info.json"
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$REMOTE_INFO' ]; then cp '$REMOTE_INFO' '$REMOTE_INFO.prev' 2>/dev/null || true; fi"
-          scp -P "$HOSTINGER_SSH_PORT" deploy-commit.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_INFO"
+          scp -P "$HOSTINGER_SSH_PORT" deploy-commit.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_INFO" || echo "[heartbeat][warn] Failed to write .deploy-info.json"
           echo "[heartbeat] Marker deployed (commit=${GITHUB_SHA})"
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
