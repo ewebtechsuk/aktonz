@@ -43,9 +43,9 @@ jobs:
     name: Sync files to Hostinger
     runs-on: ubuntu-latest
     env:
-      # Expose production URL at job level so conditional smoke tests (if: uses env.PRODUCTION_URL) evaluate correctly.
-      # Previously only set at step-level, causing env.PRODUCTION_URL to be empty in condition context and skipping metrics.
-      PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+      # Raw sources (may be empty). We'll resolve to PRODUCTION_URL in a step to avoid complex inline expression issues.
+      PROD_URL_SECRET: ${{ secrets.PRODUCTION_URL }}
+      PROD_URL_VAR: ${{ vars.PRODUCTION_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,6 +68,16 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
+
+      - name: Resolve production URL (secret > var) & show
+        run: |
+          if [ -n "${PROD_URL_SECRET:-}" ]; then USE="$PROD_URL_SECRET"; elif [ -n "${PROD_URL_VAR:-}" ]; then USE="$PROD_URL_VAR"; else USE=""; fi
+          if [ -z "$USE" ]; then
+            echo "[prod-url][warn] Neither secret nor variable set (PRODUCTION_URL). Health checkpoints will skip.";
+          else
+            echo "[prod-url] Using production URL: $USE";
+            echo "PRODUCTION_URL=$USE" >> $GITHUB_ENV
+          fi
 
       - name: Ensure jq installed
         run: |
