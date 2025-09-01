@@ -982,6 +982,27 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Write public deployment heartbeat
+        if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          set -e
+          CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
+          HOSTINGER_PATH="$CLEAN_PATH"
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          printf '{"commit":"%s","short":"%s","deployed_at":"%s","workflow_run":"%s","repo":"%s","ref":"%s"}\n' \
+            "$GITHUB_SHA" "${GITHUB_SHA::7}" "$NOW" "$GITHUB_RUN_ID" "$GITHUB_REPOSITORY" "$GITHUB_REF" > deploy-commit.json
+          echo "[heartbeat] Writing deployment marker to remote .deploy-commit.json"
+          scp -P "$HOSTINGER_SSH_PORT" deploy-commit.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$HOSTINGER_PATH/.deploy-commit.json"
+          REMOTE_INFO="$HOSTINGER_PATH/.deploy-info.json"
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "if [ -f '$REMOTE_INFO' ]; then cp '$REMOTE_INFO' '$REMOTE_INFO.prev' 2>/dev/null || true; fi"
+          scp -P "$HOSTINGER_SSH_PORT" deploy-commit.json "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST:$REMOTE_INFO"
+          echo "[heartbeat] Marker deployed (commit=${GITHUB_SHA})"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Build code manifest (plugins/themes hashes)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         id: code_manifest
