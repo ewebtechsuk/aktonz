@@ -91,6 +91,15 @@ fi
 # Append --allow-root automatically if root
 [ $IS_ROOT -eq 1 ] && WP="$WP --allow-root"
 
+# If current PHP lacks mysqli but php7.4 (with mysqli) exists, fallback for CLI ops
+if ! php -m 2>/dev/null | grep -qi mysqli && command -v php7.4 >/dev/null 2>&1; then
+  if php7.4 -m 2>/dev/null | grep -qi mysqli; then
+    log "Switching wp-cli runtime to php7.4 (mysqli available)"
+    WP="php7.4 wp-cli.phar"
+    [ $IS_ROOT -eq 1 ] && WP="$WP --allow-root"
+  fi
+fi
+
 # Generate .env if absent
 if [ ! -f .env ]; then
   log "Creating .env"
