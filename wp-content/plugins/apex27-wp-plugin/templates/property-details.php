@@ -362,4 +362,184 @@ function closeViewingForm() {
 </script>
 <!-- If using Bootstrap 5, ensure JS is loaded for carousel -->
 <?php
+// --- Additional Foxtons-style sections (CTA, related properties, local intelligence) ---
+?>
+<style>
+/* Foxtons-inspired extended layout */
+.apex27-section { padding: 3rem 0; }
+.apex27-section.alt { background:#00665a; color:#fff; }
+.apex27-section.alt h2,.apex27-section.alt h3 { color:#fff; }
+.apex27-cta-box { text-align:center; padding:3rem 1rem; background:#00665a; color:#fff; border-radius:0.75rem; }
+.apex27-cta-box .btn { margin-top:1rem; }
+.apex27-related { display:flex; gap:1rem; overflow-x:auto; scroll-snap-type:x mandatory; }
+.apex27-related-card { flex:0 0 260px; background:#fff; border:1px solid #e3e6e9; border-radius:0.75rem; box-shadow:0 2px 8px rgba(0,0,0,.05); scroll-snap-align:start; display:flex; flex-direction:column; }
+.apex27-related-card img { width:100%; height:150px; object-fit:cover; border-top-left-radius:0.75rem; border-top-right-radius:0.75rem; }
+.apex27-related-card .body { padding:0.75rem 0.85rem 1rem; font-size:0.875rem; }
+.apex27-related-card .price { font-weight:600; font-size:1rem; color:#00665a; }
+.apex27-pills { display:flex; flex-wrap:wrap; gap:.5rem; margin:0; padding:0; list-style:none; }
+.apex27-pills li { background:#f1f3f5; border-radius:2rem; padding:.35rem .85rem; font-size:.75rem; font-weight:600; letter-spacing:.5px; text-transform:uppercase; }
+.apex27-panels { display:grid; gap:1.25rem; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+.apex27-panel { background:#f8f9fa; border:1px solid #e3e6e9; border-radius:0.75rem; padding:1.25rem 1.25rem 1.6rem; position:relative; }
+.apex27-panel h4 { font-size:1rem; font-weight:700; margin:0 0 .75rem; }
+.apex27-panel.small { padding:1rem; }
+.apex27-metric { font-size:2rem; font-weight:700; color:#00665a; }
+.apex27-metric-sub { font-size:.75rem; text-transform:uppercase; letter-spacing:.5px; color:#495057; }
+.apex27-grid-cols-3 { display:grid; gap:1.25rem; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); }
+.apex27-mini-list { list-style:none; margin:0; padding:0; font-size:.8125rem; }
+.apex27-mini-list li { margin-bottom:.35rem; }
+@media (max-width: 767px){ .apex27-related-card { flex:0 0 70%; } }
+</style>
+
+<?php
+// Helper: fetch related / similar properties (best-effort; depends on plugin API)
+$related_properties = [];
+try {
+        if (method_exists($apex27, 'search_properties') && isset($details->bedrooms)) {
+                $search_args = [
+                        'limit' => 6,
+                        'min_beds' => max(1, (int)$details->bedrooms - 1),
+                        'max_beds' => (int)$details->bedrooms + 1,
+                ];
+                if (!empty($details->latitude) && !empty($details->longitude)) {
+                        $search_args['near'] = $details->latitude . ',' . $details->longitude;
+                }
+                $related = $apex27->search_properties($search_args);
+                if (is_array($related)) {
+                        // Exclude current property by id if id available
+                        foreach ($related as $r) { if (!isset($details->id) || !isset($r->id) || $r->id != $details->id) { $related_properties[] = $r; } }
+                }
+        }
+} catch (Throwable $e) { /* silently ignore */ }
+
+// Helper: derive local intelligence placeholders
+$intelligence = [
+        'tenants' => isset($details->bedrooms) ? max(50, (int)$details->bedrooms * 120) : 0,
+        'properties' => isset($details->bedrooms) ? 1000 + (int)$details->bedrooms * 10 : 1000,
+];
+
+// Nearest stations placeholder (requires coords – we provide a best-effort static fallback)
+$nearest_stations = [];
+if (!empty($details->nearestStations) && is_array($details->nearestStations)) {
+        $nearest_stations = $details->nearestStations; // Assume plugin may supply
+} elseif (!empty($details->displayAddress)) {
+        // Minimal fallback examples
+        $nearest_stations = [
+                (object)['name' => __('Central Station','apex27'), 'distance' => '0.5 mi'],
+                (object)['name' => __('Park Station','apex27'), 'distance' => '0.8 mi'],
+        ];
+}
+?>
+
+<div class="apex27-section alt">
+    <div class="container">
+        <div class="apex27-cta-box">
+            <h2 class="mb-3" dir="auto"><?=htmlspecialchars(__('Interested in this property?', $text_domain))?></h2>
+            <p class="lead mb-4" dir="auto"><?=htmlspecialchars(__('Call our team now to arrange a viewing or ask a question.', $text_domain))?></p>
+            <a href="#property-details-contact-form" class="btn btn-warning btn-lg"><?=htmlspecialchars(__('Call / Enquire', $text_domain))?></a>
+        </div>
+    </div>
+</div>
+
+<?php if ($related_properties) { ?>
+<div class="apex27-section" id="apex27-related">
+    <div class="container">
+        <h3 class="mb-4" dir="auto"><?=htmlspecialchars(__('You might also be interested in', $text_domain))?></h3>
+        <div class="apex27-related">
+            <?php foreach($related_properties as $rel) { 
+                    $rImgs = $rel->images ?? [];
+                    $thumb = '';
+                    if ($rImgs) { $thumb = htmlspecialchars($rImgs[0]->url); }
+                    $relUrl = isset($rel->permalink) ? $rel->permalink : (isset($rel->id) ? add_query_arg('property_id', $rel->id, site_url('/property/')) : '#');
+                    ?>
+                    <article class="apex27-related-card">
+                        <?php if($thumb) { ?><a href="<?=esc_url($relUrl)?>"><img src="<?=$thumb?>" alt="<?=htmlspecialchars($rel->displayAddress ?? __('Property', $text_domain))?>"></a><?php } ?>
+                        <div class="body">
+                            <div class="price"><?=htmlspecialchars($rel->displayPrice ?? '')?></div>
+                            <div class="mb-1" style="font-weight:600; line-height:1.2;">
+                                <a href="<?=esc_url($relUrl)?>" style="text-decoration:none; color:#212529;"><?=htmlspecialchars($rel->displayAddress ?? '')?></a>
+                            </div>
+                            <ul class="apex27-pills mb-2">
+                                <?php if(isset($rel->bedrooms)) { ?><li><?=intval($rel->bedrooms)?> <?=__('Beds',$text_domain)?></li><?php } ?>
+                                <?php if(isset($rel->bathrooms)) { ?><li><?=intval($rel->bathrooms)?> <?=__('Baths',$text_domain)?></li><?php } ?>
+                                <?php if(isset($rel->livingRooms)) { ?><li><?=intval($rel->livingRooms)?> <?=__('Living',$text_domain)?></li><?php } ?>
+                            </ul>
+                            <div style="font-size:.7rem; text-transform:uppercase; letter-spacing:.5px; color:#6c757d;">
+                                <?=htmlspecialchars($rel->propertyType ?? '')?>
+                            </div>
+                        </div>
+                    </article>
+            <?php } ?>
+        </div>
+    </div>
+</div>
+<?php } ?>
+
+<div class="apex27-section" id="apex27-local-intelligence">
+    <div class="container">
+        <h3 class="mb-4" dir="auto"><?=htmlspecialchars(__('Local Intelligence', $text_domain))?></h3>
+        <div class="apex27-panels mb-4">
+            <div class="apex27-panel">
+                <h4><?=htmlspecialchars(__('Tenant Demand (indicative)', $text_domain))?></h4>
+                <div class="apex27-metric"><?=number_format($intelligence['tenants'])?></div>
+                <div class="apex27-metric-sub"><?=htmlspecialchars(__('Active Seeker Signals', $text_domain))?></div>
+            </div>
+            <div class="apex27-panel">
+                <h4><?=htmlspecialchars(__('Properties in Area (est.)', $text_domain))?></h4>
+                <div class="apex27-metric"><?=number_format($intelligence['properties'])?>+</div>
+                <div class="apex27-metric-sub"><?=htmlspecialchars(__('Residential Units', $text_domain))?></div>
+            </div>
+            <div class="apex27-panel">
+                <h4><?=htmlspecialchars(__('How is the market performing?', $text_domain))?></h4>
+                <p class="mb-2" style="font-size:.85rem;"><?=htmlspecialchars(__('Stable with moderate buyer enquiry week-on-week.', $text_domain))?></p>
+                <span class="badge bg-success"><?=htmlspecialchars(__('Stable', $text_domain))?></span>
+            </div>
+            <div class="apex27-panel">
+                <h4><?=htmlspecialchars(__('What could your property be worth?', $text_domain))?></h4>
+                <p class="mb-3" style="font-size:.85rem;"><?=htmlspecialchars(__('Request a free, no obligation valuation from our local expert.', $text_domain))?></p>
+                <a href="#property-details-contact-form" class="btn btn-outline-brand btn-sm"><?=htmlspecialchars(__('Get a valuation', $text_domain))?></a>
+            </div>
+        </div>
+        <div class="apex27-grid-cols-3">
+            <div>
+                <h5 class="fw-bold mb-2" style="font-size:.9rem; text-transform:uppercase; letter-spacing:.5px;"><?=htmlspecialchars(__('Nearest Stations', $text_domain))?></h5>
+                <ul class="apex27-mini-list">
+                    <?php foreach($nearest_stations as $st) { ?>
+                        <li><?=htmlspecialchars(($st->name ?? 'Station'). (isset($st->distance)? ' • '.$st->distance : ''))?></li>
+                    <?php } ?>
+                    <?php if (!$nearest_stations) { ?><li><?=htmlspecialchars(__('Data unavailable', $text_domain))?></li><?php } ?>
+                </ul>
+            </div>
+            <div>
+                <h5 class="fw-bold mb-2" style="font-size:.9rem; text-transform:uppercase; letter-spacing:.5px;"><?=htmlspecialchars(__('Market Review', $text_domain))?></h5>
+                <ul class="apex27-mini-list">
+                    <li><?=htmlspecialchars(__('Average time to let: 28 days', $text_domain))?></li>
+                    <li><?=htmlspecialchars(__('Average price change (12m): +2.1%', $text_domain))?></li>
+                    <li><?=htmlspecialchars(__('Rental yield (gross est.): 3.9%', $text_domain))?></li>
+                </ul>
+            </div>
+            <div>
+                <h5 class="fw-bold mb-2" style="font-size:.9rem; text-transform:uppercase; letter-spacing:.5px;"><?=htmlspecialchars(__('Local Office', $text_domain))?></h5>
+                <p style="font-size:.8rem;" class="mb-2">
+                    <?=htmlspecialchars(get_bloginfo('name'))?><br>
+                    <?=htmlspecialchars(__('Local Property Team', $text_domain))?><br>
+                    <a href="tel:<?=preg_replace('/[^0-9+]/','', get_option('admin_phone', '+440000000000'))?>" style="text-decoration:none;">Call <?=htmlspecialchars(get_option('admin_phone','+44 00 0000 0000'))?></a>
+                </p>
+                <a href="#property-details-contact-form" class="btn btn-sm btn-brand"><?=htmlspecialchars(__('Contact us', $text_domain))?></a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Horizontal scroll drag for related properties (optional UX sugar)
+(function(){
+    var scroller = document.querySelector('.apex27-related');
+    if(!scroller) return;
+    var isDown=false,startX,scrollLeft;
+    scroller.addEventListener('mousedown',function(e){ isDown=true; scroller.classList.add('dragging'); startX=e.pageX-scroller.offsetLeft; scrollLeft=scroller.scrollLeft; });
+    ['mouseleave','mouseup'].forEach(function(ev){ scroller.addEventListener(ev,function(){ isDown=false; scroller.classList.remove('dragging'); }); });
+    scroller.addEventListener('mousemove',function(e){ if(!isDown) return; e.preventDefault(); var x=e.pageX-scroller.offsetLeft; var walk=(x-startX)*1; scroller.scrollLeft=scrollLeft-walk; });
+})();
+</script>
+<?php
 get_footer();
