@@ -835,9 +835,25 @@ jobs:
       - name: Rsync to server (supports dry run)
         if: ${{ github.event.inputs.audit != 'true' }}
         run: |
-          # --- Commit metadata injection & heartbeat (PHP) generation BEFORE rsync ---
+          # --- Commit metadata injection & diagnostics BEFORE rsync ---
           SHORT_SHA=${GITHUB_SHA::7}
-          printf '%s' "<?php\nheader('Content-Type: application/json');\necho json_encode([\n  'commit'=>'$GITHUB_SHA',\n  'short'=>'$SHORT_SHA',\n  'generated_at'=>gmdate('c'),\n  'source'=>'php'\n]);\n" > deploy-heartbeat.php
+          COMMIT="$GITHUB_SHA"
+          # Dynamic diagnostic PHP heartbeat (reveals docroot + partial listing on production)
+          printf '%s\n' "<?php" > deploy-heartbeat.php
+          printf '%s\n' "$meta = [" >> deploy-heartbeat.php
+          printf '%s\n' "  'commit' => '$COMMIT'," >> deploy-heartbeat.php
+          printf '%s\n' "  'short' => '$SHORT_SHA'," >> deploy-heartbeat.php
+          printf '%s\n' "  'generated_at' => gmdate('c')," >> deploy-heartbeat.php
+          printf '%s\n' "  'pwd' => getcwd()," >> deploy-heartbeat.php
+          printf '%s\n' "  'docroot' => \\$_SERVER['DOCUMENT_ROOT'] ?? null," >> deploy-heartbeat.php
+          printf '%s\n' "  'scan' => array_slice(scandir(__DIR__), 0, 40)," >> deploy-heartbeat.php
+          printf '%s\n' "  'php_version' => PHP_VERSION," >> deploy-heartbeat.php
+          printf '%s\n' "];" >> deploy-heartbeat.php
+          printf '%s\n' "header('Content-Type: application/json');" >> deploy-heartbeat.php
+          printf '%s\n' "echo json_encode($meta);" >> deploy-heartbeat.php
+          # Plain text probe inside wp-content to confirm rsync path alignment
+          mkdir -p wp-content || true
+          echo "$COMMIT" > "wp-content/ci_probe_${SHORT_SHA}.txt"
           # Inject footer comment with commit (idempotent; remove previous then append)
           if [ -f index.php ]; then
             sed -i "/DEPLOY_COMMIT:/d" index.php || true
@@ -913,6 +929,19 @@ jobs:
               echo "DRIFT_STATUS=none" >> $GITHUB_ENV
             fi
           fi
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Post-rsync remote listing snapshot
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          echo "[listing] Capturing remote directory listings into wp-content for external fetch";
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" \
+            "(ls -al '$HOSTINGER_PATH' | head -n 300) > '$HOSTINGER_PATH/wp-content/ci_listing_root_${SHORT}.txt' 2>/dev/null || true; (ls -al '$HOSTINGER_PATH/wp-content' | head -n 300) > '$HOSTINGER_PATH/wp-content/ci_listing_wpcontent_${SHORT}.txt' 2>/dev/null || true" || echo '[listing][warn] remote ls failed'
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
