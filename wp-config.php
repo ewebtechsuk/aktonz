@@ -1,5 +1,4 @@
 <?php
-<?php
 /**
  * The base configuration for WordPress
  *
@@ -103,13 +102,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 require_once ABSPATH . 'wp-settings.php';
 
 // Load .env if present
-if (file_exists(__DIR__.'/.env')) { foreach (parse_ini_file(__DIR__.'/.env') as $k=>$v){ if(!getenv($k)) putenv("$k=$v"); } }
-// Salts (regenerated)
-define('AUTH_KEY',         '1U^|+3[4m.fJeX#~ff+XR4&eo6HlPw 8Jr25p7s0q1|!]jc^U|PfCFN-!~M3A|-/');
-define('SECURE_AUTH_KEY',  's=7&gw[Iqt7tnHFsTD#5xen%78<@1#W1Y#hWIchM(S;![8F0Y@bUTsd3Ddcj-P@D');
-define('LOGGED_IN_KEY',    'KS?RC<J6]lmIl@;}8:9dgStXa> N-/CSilPiXByC:uh)VI}RWJkiYPZe|-,02?Zs');
-define('NONCE_KEY',        ']>$-5|?z-0:AOzO* %St*6cYja%R-^G|Xi}<Q _z`pJF61#+L^Y!/|=e<>9lm<@D');
-define('AUTH_SALT',        'P37B5lIWM?lrX$}!-5!7}VA0-Gez>$({L|ex9 &YSVXZPhlHoWr?Cq5Ag*+E`>-J');
-define('SECURE_AUTH_SALT', 'tu&z4F},UvM&0n!AY ZV5I]`E}@RWyM8-+LASmE8n<p)bq^))&<MLPGz0bMpJp}U');
-define('LOGGED_IN_SALT',   '`) PiOyaXSuTb+?Q=ju|d|+|>}2RV}SDA[2Ty-QcJ@]Fz_Ldf$(Sj|N.XG+Xj[^x');
-define('NONCE_SALT',       'UE(bM%i)_(r.bWGt*A73VjCRiEzQU6V,HZ|j$Hc)#]UJ/z~wt@j.h|S:P$-N,b[p');
+if (file_exists(__DIR__.'/.env')) {
+    foreach (parse_ini_file(__DIR__.'/.env') as $k => $v) {
+        if (!getenv($k)) {
+            putenv("$k=$v");
+        }
+    }
+}
