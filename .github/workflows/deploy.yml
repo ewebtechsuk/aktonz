@@ -840,7 +840,7 @@ jobs:
           COMMIT="$GITHUB_SHA"
           # Dynamic diagnostic PHP heartbeat (reveals docroot + partial listing on production)
           printf '%s\n' "<?php" > deploy-heartbeat.php
-          printf '%s\n' "$meta = [" >> deploy-heartbeat.php
+          printf '%s\n' '$meta = [' >> deploy-heartbeat.php
           printf '%s\n' "  'commit' => '$COMMIT'," >> deploy-heartbeat.php
           printf '%s\n' "  'short' => '$SHORT_SHA'," >> deploy-heartbeat.php
           printf '%s\n' "  'generated_at' => gmdate('c')," >> deploy-heartbeat.php
@@ -850,7 +850,7 @@ jobs:
           printf '%s\n' "  'php_version' => PHP_VERSION," >> deploy-heartbeat.php
           printf '%s\n' "];" >> deploy-heartbeat.php
           printf '%s\n' "header('Content-Type: application/json');" >> deploy-heartbeat.php
-          printf '%s\n' "echo json_encode($meta);" >> deploy-heartbeat.php
+          printf '%s\n' 'echo json_encode($meta);' >> deploy-heartbeat.php
           # Plain text probe inside wp-content to confirm rsync path alignment
           mkdir -p wp-content || true
           echo "$COMMIT" > "wp-content/ci_probe_${SHORT_SHA}.txt"
@@ -942,6 +942,19 @@ jobs:
           echo "[listing] Capturing remote directory listings into wp-content for external fetch";
           ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" \
             "(ls -al '$HOSTINGER_PATH' | head -n 300) > '$HOSTINGER_PATH/wp-content/ci_listing_root_${SHORT}.txt' 2>/dev/null || true; (ls -al '$HOSTINGER_PATH/wp-content' | head -n 300) > '$HOSTINGER_PATH/wp-content/ci_listing_wpcontent_${SHORT}.txt' 2>/dev/null || true" || echo '[listing][warn] remote ls failed'
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Remote path introspection (public listing post-rsync)
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          SHORT=${GITHUB_SHA::7}
+            echo "[introspect] Writing deeper listing (maxdepth 3) to wp-content/ci_listing_after_${SHORT}.txt"
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" \
+            "(echo 'HOSTINGER_PATH=$HOSTINGER_PATH'; pwd; echo '--- ROOT (maxdepth 2 files) ---'; find '$HOSTINGER_PATH' -maxdepth 2 -type f -printf '%p\n' | head -n 120; echo '--- WP-CONTENT (maxdepth 2 files) ---'; find '$HOSTINGER_PATH/wp-content' -maxdepth 2 -type f -printf '%p\n' | head -n 120) > '$HOSTINGER_PATH/wp-content/ci_listing_after_${SHORT}.txt' 2>/dev/null || true" || echo '[introspect][warn] remote introspection failed'
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
