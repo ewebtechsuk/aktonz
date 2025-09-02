@@ -69,6 +69,18 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
 
+      - name: Early remote connectivity marker
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          echo "[early] Creating early marker via SSH..."
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo $GITHUB_SHA > $HOSTINGER_PATH/ci_early_$SHORT.txt 2>/dev/null || true" || echo "[early][warn] SSH early marker failed"
+          echo "[early] Attempted to write ci_early_$SHORT.txt"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Resolve production URL (secret > var) & show
         run: |
           if [ -n "${PROD_URL_SECRET:-}" ]; then USE="$PROD_URL_SECRET"; elif [ -n "${PROD_URL_VAR:-}" ]; then USE="$PROD_URL_VAR"; else USE=""; fi
@@ -823,6 +835,14 @@ jobs:
       - name: Rsync to server (supports dry run)
         if: ${{ github.event.inputs.audit != 'true' }}
         run: |
+          # --- Commit metadata injection & heartbeat (PHP) generation BEFORE rsync ---
+          SHORT_SHA=${GITHUB_SHA::7}
+          printf '%s' "<?php\nheader('Content-Type: application/json');\necho json_encode([\n  'commit'=>'$GITHUB_SHA',\n  'short'=>'$SHORT_SHA',\n  'generated_at'=>gmdate('c'),\n  'source'=>'php'\n]);\n" > deploy-heartbeat.php
+          # Inject footer comment with commit (idempotent; remove previous then append)
+          if [ -f index.php ]; then
+            sed -i "/DEPLOY_COMMIT:/d" index.php || true
+            echo "<!-- DEPLOY_COMMIT: $SHORT_SHA -->" >> index.php
+          fi
           # Base rsync excludes
           # Sanitize HOSTINGER_PATH (remove trailing CR/LF/whitespace) for consistency
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
