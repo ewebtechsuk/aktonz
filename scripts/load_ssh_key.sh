@@ -6,11 +6,15 @@ set -euo pipefail
 KEY=./deploy_aktonz_key
 DO_REMOTE_TEST=false
 DO_HOSTINGER_TEST=false
+DO_FINGERPRINT=false
+DO_DEBUG_SSH=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --key) KEY="$2"; shift 2;;
     --remote-test) DO_REMOTE_TEST=true; shift;;
     --hostinger-test) DO_HOSTINGER_TEST=true; shift;;
+    --fingerprint) DO_FINGERPRINT=true; shift;;
+    --debug-ssh) DO_DEBUG_SSH=true; shift;;
     *) echo "[key][error] Unknown arg $1" >&2; exit 1;;
   esac
 done
@@ -21,14 +25,7 @@ chmod 600 "$KEY" || true
 # Start agent if needed
 if [[ -z "${SSH_AUTH_SOCK:-}" ]] || ! ssh-add -l >/dev/null 2>&1; then
   echo "[key] Starting new ssh-agent"
-  # Start agent in this subshell; capture exports
   eval "$(ssh-agent -s)" >/dev/null
-  # Persist environment so parent shell can adopt it
-  {
-    echo "export SSH_AUTH_SOCK=${SSH_AUTH_SOCK}"
-    echo "export SSH_AGENT_PID=${SSH_AGENT_PID}"
-  } > .ssh-agent-env
-  echo "[key] Wrote agent environment to .ssh-agent-env (run: source ./.ssh-agent-env)"
 else
   echo "[key] Existing ssh-agent detected"
 fi
@@ -51,6 +48,19 @@ fi
 if $DO_REMOTE_TEST; then
   echo "[key] Testing GitHub SSH auth..."
   ssh -o BatchMode=yes -T git@github.com 2>&1 | sed 's/^/[github]/'
+fi
+if $DO_FINGERPRINT; then
+  if [[ -f "$KEY.pub" ]]; then
+    FP=$(ssh-keygen -l -f "$KEY.pub" | awk '{print $2}')
+    TYPE=$(ssh-keygen -l -f "$KEY.pub" | awk '{print $4}')
+    echo "[key] Public key fingerprint: $FP ($TYPE)"
+  else
+    echo "[key][warn] No .pub alongside private key; cannot show fingerprint"
+  fi
+fi
+if $DO_DEBUG_SSH; then
+  echo "[key] Running verbose SSH test forcing this key..."
+  ssh -vvv -i "$KEY" -o IdentitiesOnly=yes -T git@github.com 2>&1 | sed 's/^/[debug]/' || true
 fi
 if $DO_HOSTINGER_TEST; then
   # Expect env vars HOSTINGER_SSH_HOST HOSTINGER_SSH_PORT HOSTINGER_SSH_USER

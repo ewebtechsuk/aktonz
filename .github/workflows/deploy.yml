@@ -888,17 +888,17 @@ jobs:
           # Plain text probe inside wp-content to confirm rsync path alignment
           mkdir -p wp-content || true
           echo "$COMMIT" > "wp-content/ci_probe_${SHORT_SHA}.txt"
-          # Generate mu-plugin commit marker (footer HTML comment)
+          # Generate mu-plugin commit marker (footer HTML comment) without heredoc YAML pitfalls
           mkdir -p wp-content/mu-plugins || true
-          cat > wp-content/mu-plugins/commit-marker.php <<EOF
-<?php
-/**
- * Plugin Name: Deployment Commit Marker
- * Description: Outputs current deployed commit hash in the HTML footer.
- */
-if (!defined('ABSPATH')) { return; }
-add_action('wp_footer', function(){ echo "<!-- DEPLOY_COMMIT: $SHORT_SHA ($COMMIT) -->\n"; }, 9999);
-EOF
+          {
+            echo "<?php"
+            echo "/**"
+            echo " * Plugin Name: Deployment Commit Marker"
+            echo " * Description: Outputs current deployed commit hash in the HTML footer."
+            echo " */"
+            echo "if (!defined('ABSPATH')) { return; }"
+            echo "add_action('wp_footer', function(){ echo \"<!-- DEPLOY_COMMIT: ${SHORT_SHA} (${COMMIT}) -->\\n\"; }, 9999);"
+          } > wp-content/mu-plugins/commit-marker.php
           # Base rsync excludes
           # Sanitize HOSTINGER_PATH (remove trailing CR/LF/whitespace) for consistency
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
