@@ -81,6 +81,40 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
+      - name: Remote DB preflight (fail-fast)
+        run: |
+          set -e
+          echo "[db-preflight] Locating remote wp-config.php"
+          FIND_CFG="if [ -f '$HOSTINGER_PATH/wp-config.php' ]; then echo '$HOSTINGER_PATH/wp-config.php'; elif [ -f '$(dirname "$HOSTINGER_PATH")/wp-config.php' ]; then echo '$(dirname "$HOSTINGER_PATH")/wp-config.php'; fi"
+          CFG_PATH=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "$FIND_CFG") || CFG_PATH=""
+          if [ -z "$CFG_PATH" ]; then echo "[db-preflight][warn] wp-config.php not found; continuing (cannot validate DB)"; exit 0; fi
+          echo "[db-preflight] Using wp-config: $CFG_PATH"
+          # Extract constants
+          extract(){ ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'${1}'\\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" 2>/dev/null || true; }
+          DB_NAME=$(extract DB_NAME)
+          DB_USER=$(extract DB_USER)
+            DB_HOST=$(extract DB_HOST)
+          PW_LEN=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'DB_PASSWORD'\\" '$CFG_PATH' | sed -E \"s/.*'DB_PASSWORD' *, *'([^']*)'.*/\\1/\" | awk '{print length($0)}'" 2>/dev/null || echo 0)
+          echo "[db-preflight] DB_NAME=$DB_NAME DB_USER=$DB_USER DB_HOST=$DB_HOST DB_PASSWORD_LEN=$PW_LEN"
+          if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
+            echo "[db-preflight][warn] Missing DB constants; continuing"
+            exit 0
+          fi
+          # Create and run a remote PHP probe (avoids exposing password in logs)
+          PROBE="<?php @include '$CFG_PATH'; $t=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); if(!$t){echo 'CONNECT_FAIL:' . (mysqli_connect_errno()).' '.mysqli_connect_error();} else {echo 'CONNECT_OK'; mysqli_close($t);} ?>"
+          RESULT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -d display_errors=0 -r \"$PROBE\"" 2>/dev/null || true)
+          echo "[db-preflight] Result=$RESULT"
+          if echo "$RESULT" | grep -q 'CONNECT_FAIL'; then
+            echo "[db-preflight][fatal] Database connection failing; aborting deploy to avoid serving broken state." >&2
+            exit 1
+          fi
+          echo "[db-preflight] OK (database reachable)"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
       - name: Resolve production URL (secret > var) & show
         run: |
           if [ -n "${PROD_URL_SECRET:-}" ]; then USE="$PROD_URL_SECRET"; elif [ -n "${PROD_URL_VAR:-}" ]; then USE="$PROD_URL_VAR"; else USE=""; fi
@@ -854,11 +888,17 @@ jobs:
           # Plain text probe inside wp-content to confirm rsync path alignment
           mkdir -p wp-content || true
           echo "$COMMIT" > "wp-content/ci_probe_${SHORT_SHA}.txt"
-          # Inject footer comment with commit (idempotent; remove previous then append)
-          if [ -f index.php ]; then
-            sed -i "/DEPLOY_COMMIT:/d" index.php || true
-            echo "<!-- DEPLOY_COMMIT: $SHORT_SHA -->" >> index.php
-          fi
+          # Generate mu-plugin commit marker (footer HTML comment)
+          mkdir -p wp-content/mu-plugins || true
+          cat > wp-content/mu-plugins/commit-marker.php <<EOF
+<?php
+/**
+ * Plugin Name: Deployment Commit Marker
+ * Description: Outputs current deployed commit hash in the HTML footer.
+ */
+if (!defined('ABSPATH')) { return; }
+add_action('wp_footer', function(){ echo "<!-- DEPLOY_COMMIT: $SHORT_SHA ($COMMIT) -->\n"; }, 9999);
+EOF
           # Base rsync excludes
           # Sanitize HOSTINGER_PATH (remove trailing CR/LF/whitespace) for consistency
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
@@ -872,6 +912,14 @@ jobs:
             "aktonz-local-copy" # local backup snapshot, never deploy
             "wp-content/plugins/litespeed-cache" # exclude problematic LiteSpeed plugin entirely (neutralized)
           )
+
+          # Unless explicitly allowed, protect remote wp-config.php from overwrite
+          if [ "${DEPLOY_WP_CONFIG:-false}" != "true" ]; then
+            RSYNC_EXCLUDES+=("wp-config.php")
+            echo "[deploy] Excluding wp-config.php (set secret DEPLOY_WP_CONFIG=true to deploy it)"
+          else
+            echo "[deploy] WARNING: wp-config.php will be deployed (DEPLOY_WP_CONFIG=true)"
+          fi
 
           # Exclude remote-only or dynamically generated directories that are not tracked in the repo but required in production.
           # These paths existed on production (e.g. asset/CSS generation or custom platform code) and were likely removed by --delete, causing homepage fatal errors.
@@ -946,6 +994,38 @@ jobs:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Remote DB connectivity diagnostics
+        if: ${{ github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
+        run: |
+          # Attempt to extract DB constants without exposing full secrets
+          CFG_PATH="$HOSTINGER_PATH/wp-config.php"
+          if [ ! -f "$CFG_PATH" ]; then
+            PARENT_CFG="$(dirname "$HOSTINGER_PATH")/wp-config.php"
+            [ -f "$PARENT_CFG" ] && CFG_PATH="$PARENT_CFG"
+          fi
+          if [ -f "$CFG_PATH" ]; then
+            echo "[db-diag] Found wp-config at $CFG_PATH"
+            DB_NAME=$(grep -E "define\( *'DB_NAME'" "$CFG_PATH" | sed -E "s/.*'DB_NAME' *, *'([^']+)'.*/\1/" | head -n1 || true)
+            DB_USER=$(grep -E "define\( *'DB_USER'" "$CFG_PATH" | sed -E "s/.*'DB_USER' *, *'([^']+)'.*/\1/" | head -n1 || true)
+            DB_HOST=$(grep -E "define\( *'DB_HOST'" "$CFG_PATH" | sed -E "s/.*'DB_HOST' *, *'([^']+)'.*/\1/" | head -n1 || true)
+            echo "[db-diag] DB_NAME=$DB_NAME DB_USER=$DB_USER DB_HOST=$DB_HOST"
+            # Try a short mysql connectivity probe if client exists and password not obviously blank (avoid echoing password)
+            if command -v mysql >/dev/null 2>&1; then
+              # Extract password length only
+              PW_LEN=$(grep -E "define\( *'DB_PASSWORD'" "$CFG_PATH" | sed -E "s/.*'DB_PASSWORD' *, *'([^']*)'.*/\1/" | awk '{print length($0)}')
+              echo "[db-diag] DB_PASSWORD length=$PW_LEN";
+              if [ -n "$DB_HOST" ] && [ -n "$DB_USER" ] && [ -n "$DB_NAME" ]; then
+                timeout 6 bash -c "mysql -h '$DB_HOST' -u '$DB_USER' '$DB_NAME' -e 'SELECT 1' >/dev/null 2>&1" && echo "[db-diag] Basic SELECT 1 succeeded" || echo "[db-diag] MySQL probe failed (check credentials, host, or network)"
+              fi
+            else
+              echo "[db-diag] mysql client not installed on runner"
+            fi
+          else
+            echo "[db-diag] wp-config.php not found (cannot probe)"
+          fi
+        env:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
       - name: Remote path introspection (public listing post-rsync)
