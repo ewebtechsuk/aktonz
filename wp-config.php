@@ -1,5 +1,4 @@
 <?php
-<?php
 /**
  * The base configuration for WordPress
  *
@@ -31,7 +30,7 @@ define( 'DB_USER', 'wpuser' );
 define( 'DB_PASSWORD', 'wpsecret' );
 
 /** Database hostname */
-define( 'DB_HOST', 'db:3306' );
+define( 'DB_HOST', 'localhost' ); // changed from docker-style host 'db:3306'
 
 /** Database charset to use in creating database tables. */
 define( 'DB_CHARSET', 'utf8' );

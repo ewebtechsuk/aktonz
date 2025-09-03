@@ -21,7 +21,14 @@ chmod 600 "$KEY" || true
 # Start agent if needed
 if [[ -z "${SSH_AUTH_SOCK:-}" ]] || ! ssh-add -l >/dev/null 2>&1; then
   echo "[key] Starting new ssh-agent"
+  # Start agent in this subshell; capture exports
   eval "$(ssh-agent -s)" >/dev/null
+  # Persist environment so parent shell can adopt it
+  {
+    echo "export SSH_AUTH_SOCK=${SSH_AUTH_SOCK}"
+    echo "export SSH_AGENT_PID=${SSH_AGENT_PID}"
+  } > .ssh-agent-env
+  echo "[key] Wrote agent environment to .ssh-agent-env (run: source ./.ssh-agent-env)"
 else
   echo "[key] Existing ssh-agent detected"
 fi
