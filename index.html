@@ -89,7 +89,7 @@
                 <button class="tab" onclick="toggleTab(event, 'rent')">Rent</button>
             </div>
             <div class="search-bar">
-                <input type="text" placeholder="Find a property by area or postcode" />
+                <input id="searchInput" type="text" placeholder="Find a property to buy by area or postcode" />
                 <button>Search</button>
             </div>
             <a href="#" class="valuation-inline">Get a free valuation</a>
@@ -185,6 +185,12 @@
         function toggleTab(e, mode) {
             document.querySelectorAll('.tab').forEach(btn => btn.classList.remove('active'));
             e.target.classList.add('active');
+            const input = document.getElementById('searchInput');
+            if (mode === 'rent') {
+                input.placeholder = 'Find a property to rent by area or postcode';
+            } else {
+                input.placeholder = 'Find a property to buy by area or postcode';
+            }
         }
         document.getElementById('year').textContent = new Date().getFullYear();
     </script>
