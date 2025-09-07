@@ -16,6 +16,9 @@ get_header();
         <h1><?php bloginfo( 'name' ); ?></h1>
         <p><?php bloginfo( 'description' ); ?></p>
         <?php get_search_form(); ?>
+        <a class="cta-button" href="<?php echo esc_url( get_post_type_archive_link( 'post' ) ); ?>">
+            <?php _e( 'Browse All Posts', 'kava' ); ?>
+        </a>
     </div>
 </section>
 
