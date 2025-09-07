@@ -48,7 +48,7 @@ class Apex27 {
 		if($this->is_configured()) {
 			add_filter("query_vars", array($this, "add_query_vars"));
 			add_filter("template_include", array($this, "get_template_path_by_query"));
-			add_filter("init", array($this, "init_rewrite_rules"));
+                        add_action("init", array($this, "init_rewrite_rules"));
 			add_filter("document_title_parts", array($this, "format_title_parts"));
 
 			add_action("wp_enqueue_scripts", array($this, "add_scripts"));
