@@ -133,10 +133,14 @@ jobs:
           if [ -z "$CFG_PATH" ]; then echo "[db-preflight][warn] wp-config.php not found; continuing (cannot validate DB)"; exit 0; fi
           echo "[db-preflight] Using wp-config: $CFG_PATH"
           # Extract constants
-          extract(){ ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'${1}'\\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" 2>/dev/null || true; }
+          extract() {
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" \
+              "grep -E \"define\\( *'${1}'\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" \
+              2>/dev/null || true
+          }
           DB_NAME=$(extract DB_NAME)
           DB_USER=$(extract DB_USER)
-            DB_HOST=$(extract DB_HOST)
+          DB_HOST=$(extract DB_HOST)
           PW_LEN=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'DB_PASSWORD'\\" '$CFG_PATH' | sed -E \"s/.*'DB_PASSWORD' *, *'([^']*)'.*/\\1/\" | awk '{print length($0)}'" 2>/dev/null || echo 0)
           echo "[db-preflight] DB_NAME=$DB_NAME DB_USER=$DB_USER DB_HOST=$DB_HOST DB_PASSWORD_LEN=$PW_LEN"
           if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
