@@ -106,7 +106,10 @@ jobs:
       - name: Add Hostinger host key
         run: |
           mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
           ssh-keyscan -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_HOST" >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
@@ -116,7 +119,7 @@ jobs:
         run: |
           SHORT=${GITHUB_SHA::7}
           echo "[early] Creating early marker via SSH..."
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo $GITHUB_SHA > $HOSTINGER_PATH/ci_early_$SHORT.txt 2>/dev/null || true" || echo "[early][warn] SSH early marker failed"
+          ssh -o StrictHostKeyChecking=accept-new -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo $GITHUB_SHA > $HOSTINGER_PATH/ci_early_$SHORT.txt 2>/dev/null || true" || echo "[early][warn] SSH early marker failed"
           echo "[early] Attempted to write ci_early_$SHORT.txt"
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
