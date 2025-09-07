@@ -111,6 +111,7 @@ jobs:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
 
+
       - name: Early remote connectivity marker
         run: |
           SHORT=${GITHUB_SHA::7}
