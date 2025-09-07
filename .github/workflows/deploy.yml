@@ -1592,7 +1592,7 @@ jobs:
           fi
           echo "[deploy][wp_cache] total=$WP_CACHE_TOTAL true=$WP_CACHE_TRUE false=$WP_CACHE_FALSE cfg_path=$CFG_PATH"
           # Retrieve active_plugins option (JSON array)
-          ACTIVE_PLUGINS_JSON=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -r 'error_reporting(E_ERROR); $p=getenv(\"WP_ROOT\")?:\"$HOSTINGER_PATH\"; $l=$p.\"/wp-load.php\"; if(!file_exists($l)){echo \"[]\"; exit;} include $l; $ap=get_option(\"active_plugins\"); if(!is_array($ap)){$ap=[];} echo json_encode(array_values($ap));'" 2>/dev/null || echo '[]')
+          ACTIVE_PLUGINS_JSON=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -r 'error_reporting(E_ERROR); \$p=getenv(\"WP_ROOT\")?:\"$HOSTINGER_PATH\"; \$l=\$p.\"/wp-load.php\"; if(!file_exists(\$l)){echo \"[]\"; exit;} include \$l; \$ap=get_option(\"active_plugins\"); if(!is_array(\$ap)){\$ap=[];} echo json_encode(array_values(\$ap));'" 2>/dev/null || echo '[]')
           case "$ACTIVE_PLUGINS_JSON" in
             \[*\]) : ;; # looks like JSON array
             *) ACTIVE_PLUGINS_JSON='[]';;

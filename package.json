@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "test": "php -l index.html"
+    "test": "php -l wp-content/themes/kava/front-page.php"
   }
 }
