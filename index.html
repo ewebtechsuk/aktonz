@@ -90,6 +90,7 @@
             </div>
             <div class="search-bar">
                 <input id="searchInput" name="query" type="search" placeholder="Find a property to buy by area or postcode" />
+
                 <button>Search</button>
             </div>
             <a href="#" class="valuation-inline">Get a free valuation</a>
@@ -189,6 +190,7 @@
             searchInput.placeholder = mode === 'rent'
                 ? 'Find a property to rent by area or postcode'
                 : 'Find a property to buy by area or postcode';
+
         }
         document.getElementById('year').textContent = new Date().getFullYear();
     </script>

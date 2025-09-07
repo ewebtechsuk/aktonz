@@ -69,52 +69,6 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
 
-      - name: Early remote connectivity marker
-        run: |
-          SHORT=${GITHUB_SHA::7}
-          echo "[early] Creating early marker via SSH..."
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo $GITHUB_SHA > $HOSTINGER_PATH/ci_early_$SHORT.txt 2>/dev/null || true" || echo "[early][warn] SSH early marker failed"
-          echo "[early] Attempted to write ci_early_$SHORT.txt"
-        env:
-          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
-          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
-          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
-
-      - name: Remote DB preflight (fail-fast)
-        run: |
-          set -e
-          echo "[db-preflight] Locating remote wp-config.php"
-          FIND_CFG="if [ -f '$HOSTINGER_PATH/wp-config.php' ]; then echo '$HOSTINGER_PATH/wp-config.php'; elif [ -f '$(dirname "$HOSTINGER_PATH")/wp-config.php' ]; then echo '$(dirname "$HOSTINGER_PATH")/wp-config.php'; fi"
-          CFG_PATH=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "$FIND_CFG") || CFG_PATH=""
-          if [ -z "$CFG_PATH" ]; then echo "[db-preflight][warn] wp-config.php not found; continuing (cannot validate DB)"; exit 0; fi
-          echo "[db-preflight] Using wp-config: $CFG_PATH"
-          # Extract constants
-          extract(){ ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'${1}'\\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" 2>/dev/null || true; }
-          DB_NAME=$(extract DB_NAME)
-          DB_USER=$(extract DB_USER)
-            DB_HOST=$(extract DB_HOST)
-          PW_LEN=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'DB_PASSWORD'\\" '$CFG_PATH' | sed -E \"s/.*'DB_PASSWORD' *, *'([^']*)'.*/\\1/\" | awk '{print length($0)}'" 2>/dev/null || echo 0)
-          echo "[db-preflight] DB_NAME=$DB_NAME DB_USER=$DB_USER DB_HOST=$DB_HOST DB_PASSWORD_LEN=$PW_LEN"
-          if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
-            echo "[db-preflight][warn] Missing DB constants; continuing"
-            exit 0
-          fi
-          # Create and run a remote PHP probe (avoids exposing password in logs)
-          PROBE="<?php @include '$CFG_PATH'; $t=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); if(!$t){echo 'CONNECT_FAIL:' . (mysqli_connect_errno()).' '.mysqli_connect_error();} else {echo 'CONNECT_OK'; mysqli_close($t);} ?>"
-          RESULT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -d display_errors=0 -r \"$PROBE\"" 2>/dev/null || true)
-          echo "[db-preflight] Result=$RESULT"
-          if echo "$RESULT" | grep -q 'CONNECT_FAIL'; then
-            echo "[db-preflight][fatal] Database connection failing; aborting deploy to avoid serving broken state." >&2
-            exit 1
-          fi
-          echo "[db-preflight] OK (database reachable)"
-        env:
-          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
-          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
-          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
-
       - name: Resolve production URL (secret > var) & show
         run: |
           if [ -n "${PROD_URL_SECRET:-}" ]; then USE="$PROD_URL_SECRET"; elif [ -n "${PROD_URL_VAR:-}" ]; then USE="$PROD_URL_VAR"; else USE=""; fi
@@ -172,6 +126,51 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
 
 
+      - name: Early remote connectivity marker
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          echo "[early] Creating early marker via SSH..."
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo $GITHUB_SHA > $HOSTINGER_PATH/ci_early_$SHORT.txt 2>/dev/null || true" || echo "[early][warn] SSH early marker failed"
+          echo "[early] Attempted to write ci_early_$SHORT.txt"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
+
+      - name: Remote DB preflight (fail-fast)
+        run: |
+          set -e
+          echo "[db-preflight] Locating remote wp-config.php"
+          FIND_CFG="if [ -f '$HOSTINGER_PATH/wp-config.php' ]; then echo '$HOSTINGER_PATH/wp-config.php'; elif [ -f '$(dirname \"$HOSTINGER_PATH\")/wp-config.php' ]; then echo '$(dirname \"$HOSTINGER_PATH\")/wp-config.php'; fi"
+          CFG_PATH=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "$FIND_CFG") || CFG_PATH=""
+          if [ -z "$CFG_PATH" ]; then echo "[db-preflight][warn] wp-config.php not found; continuing (cannot validate DB)"; exit 0; fi
+          echo "[db-preflight] Using wp-config: $CFG_PATH"
+          # Extract constants
+          extract(){ ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'${1}'\\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" 2>/dev/null || true; }
+          DB_NAME=$(extract DB_NAME)
+          DB_USER=$(extract DB_USER)
+            DB_HOST=$(extract DB_HOST)
+          PW_LEN=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'DB_PASSWORD'\\" '$CFG_PATH' | sed -E \"s/.*'DB_PASSWORD' *, *'([^']*)'.*/\\1/\" | awk '{print length($0)}'" 2>/dev/null || echo 0)
+          echo "[db-preflight] DB_NAME=$DB_NAME DB_USER=$DB_USER DB_HOST=$DB_HOST DB_PASSWORD_LEN=$PW_LEN"
+          if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
+            echo "[db-preflight][warn] Missing DB constants; continuing"
+            exit 0
+          fi
+          # Create and run a remote PHP probe (avoids exposing password in logs)
+          PROBE="<?php @include '$CFG_PATH'; \$t=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); if(!\$t){echo 'CONNECT_FAIL:' . (mysqli_connect_errno()).' '.mysqli_connect_error();} else {echo 'CONNECT_OK'; mysqli_close(\$t);} ?>"
+          RESULT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -d display_errors=0 -r \"$PROBE\"" 2>/dev/null || true)
+          echo "[db-preflight] Result=$RESULT"
+          if echo "$RESULT" | grep -q 'CONNECT_FAIL'; then
+            echo "[db-preflight][fatal] Database connection failing; aborting deploy to avoid serving broken state." >&2
+            exit 1
+          fi
+          echo "[db-preflight] OK (database reachable)"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
       - name: Pre-audit remote environment
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
