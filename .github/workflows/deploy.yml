@@ -107,13 +107,16 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
+          ssh-keygen -R "[$HOSTINGER_SSH_HOST]:$HOSTINGER_SSH_PORT" 2>/dev/null || true
           ssh-keyscan -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_HOST" >> ~/.ssh/known_hosts
+          sort -u ~/.ssh/known_hosts -o ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+          echo "known_hosts contents:"
+          cat ~/.ssh/known_hosts
 
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-
 
       - name: Early remote connectivity marker
         run: |
