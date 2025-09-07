@@ -1,8 +1,9 @@
+---
 name: Deploy to Hostinger
 
-on:
+'on':
   push:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
     inputs:
       reason:
@@ -69,52 +70,6 @@ jobs:
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           HOSTINGER_SSH_KEY: ${{ secrets.HOSTINGER_SSH_KEY }}
 
-      - name: Early remote connectivity marker
-        run: |
-          SHORT=${GITHUB_SHA::7}
-          echo "[early] Creating early marker via SSH..."
-          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo $GITHUB_SHA > $HOSTINGER_PATH/ci_early_$SHORT.txt 2>/dev/null || true" || echo "[early][warn] SSH early marker failed"
-          echo "[early] Attempted to write ci_early_$SHORT.txt"
-        env:
-          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
-          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
-          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
-
-      - name: Remote DB preflight (fail-fast)
-        run: |
-          set -e
-          echo "[db-preflight] Locating remote wp-config.php"
-          FIND_CFG="if [ -f '$HOSTINGER_PATH/wp-config.php' ]; then echo '$HOSTINGER_PATH/wp-config.php'; elif [ -f '$(dirname "$HOSTINGER_PATH")/wp-config.php' ]; then echo '$(dirname "$HOSTINGER_PATH")/wp-config.php'; fi"
-          CFG_PATH=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "$FIND_CFG") || CFG_PATH=""
-          if [ -z "$CFG_PATH" ]; then echo "[db-preflight][warn] wp-config.php not found; continuing (cannot validate DB)"; exit 0; fi
-          echo "[db-preflight] Using wp-config: $CFG_PATH"
-          # Extract constants
-          extract(){ ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'${1}'\\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" 2>/dev/null || true; }
-          DB_NAME=$(extract DB_NAME)
-          DB_USER=$(extract DB_USER)
-            DB_HOST=$(extract DB_HOST)
-          PW_LEN=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'DB_PASSWORD'\\" '$CFG_PATH' | sed -E \"s/.*'DB_PASSWORD' *, *'([^']*)'.*/\\1/\" | awk '{print length($0)}'" 2>/dev/null || echo 0)
-          echo "[db-preflight] DB_NAME=$DB_NAME DB_USER=$DB_USER DB_HOST=$DB_HOST DB_PASSWORD_LEN=$PW_LEN"
-          if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
-            echo "[db-preflight][warn] Missing DB constants; continuing"
-            exit 0
-          fi
-          # Create and run a remote PHP probe (avoids exposing password in logs)
-          PROBE="<?php @include '$CFG_PATH'; $t=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); if(!$t){echo 'CONNECT_FAIL:' . (mysqli_connect_errno()).' '.mysqli_connect_error();} else {echo 'CONNECT_OK'; mysqli_close($t);} ?>"
-          RESULT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -d display_errors=0 -r \"$PROBE\"" 2>/dev/null || true)
-          echo "[db-preflight] Result=$RESULT"
-          if echo "$RESULT" | grep -q 'CONNECT_FAIL'; then
-            echo "[db-preflight][fatal] Database connection failing; aborting deploy to avoid serving broken state." >&2
-            exit 1
-          fi
-          echo "[db-preflight] OK (database reachable)"
-        env:
-          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
-          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
-          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
-
       - name: Resolve production URL (secret > var) & show
         run: |
           if [ -n "${PROD_URL_SECRET:-}" ]; then USE="$PROD_URL_SECRET"; elif [ -n "${PROD_URL_VAR:-}" ]; then USE="$PROD_URL_VAR"; else USE=""; fi
@@ -148,30 +103,59 @@ jobs:
         with:
           ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
 
-      - name: Add Hostinger host key (known_hosts)
+      - name: Add Hostinger host key
         run: |
-          set -e
-          : "Adding host key for $HOSTINGER_SSH_HOST:$HOSTINGER_SSH_PORT"
           mkdir -p ~/.ssh
-          # Remove any existing lines for host:port to avoid duplicates (ssh-keyscan does not include port, so just host)
-          if [ -f ~/.ssh/known_hosts ]; then
-            grep -v "^$HOSTINGER_SSH_HOST[[:space:]]" ~/.ssh/known_hosts > ~/.ssh/known_hosts.tmp || true
-            mv ~/.ssh/known_hosts.tmp ~/.ssh/known_hosts
-          fi
-          echo "[ssh] Scanning host key..."
-          KEYS=$(ssh-keyscan -p "$HOSTINGER_SSH_PORT" -T 10 "$HOSTINGER_SSH_HOST" 2>/dev/null | grep -v '^#' || true)
-          if [ -z "$KEYS" ]; then echo "[ssh][error] ssh-keyscan returned no keys for $HOSTINGER_SSH_HOST:$HOSTINGER_SSH_PORT"; exit 1; fi
-            printf '%s\n' "$KEYS" >> ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          echo "[ssh] Added $(printf '%s' "$KEYS" | grep -c '^' || echo 0) key line(s) to known_hosts"
-          # Show fingerprint (first key)
-          printf '%s\n' "$KEYS" | head -n1 | awk '{print "[ssh] First key type=" $2}' || true
+          ssh-keyscan -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_HOST" >> ~/.ssh/known_hosts
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+
+      - name: Early remote connectivity marker
+        run: |
+          SHORT=${GITHUB_SHA::7}
+          echo "[early] Creating early marker via SSH..."
+          ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "echo $GITHUB_SHA > $HOSTINGER_PATH/ci_early_$SHORT.txt 2>/dev/null || true" || echo "[early][warn] SSH early marker failed"
+          echo "[early] Attempted to write ci_early_$SHORT.txt"
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
 
-
+      - name: Remote DB preflight (fail-fast)
+        run: |
+          set -e
+          echo "[db-preflight] Locating remote wp-config.php"
+          FIND_CFG="if [ -f '$HOSTINGER_PATH/wp-config.php' ]; then echo '$HOSTINGER_PATH/wp-config.php'; elif [ -f '$(dirname \"$HOSTINGER_PATH\")/wp-config.php' ]; then echo '$(dirname \"$HOSTINGER_PATH\")/wp-config.php'; fi"
+          CFG_PATH=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "$FIND_CFG") || CFG_PATH=""
+          if [ -z "$CFG_PATH" ]; then echo "[db-preflight][warn] wp-config.php not found; continuing (cannot validate DB)"; exit 0; fi
+          echo "[db-preflight] Using wp-config: $CFG_PATH"
+          # Extract constants
+          extract(){ ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'${1}'\\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" 2>/dev/null || true; }
+          DB_NAME=$(extract DB_NAME)
+          DB_USER=$(extract DB_USER)
+            DB_HOST=$(extract DB_HOST)
+          PW_LEN=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'DB_PASSWORD'\\" '$CFG_PATH' | sed -E \"s/.*'DB_PASSWORD' *, *'([^']*)'.*/\\1/\" | awk '{print length($0)}'" 2>/dev/null || echo 0)
+          echo "[db-preflight] DB_NAME=$DB_NAME DB_USER=$DB_USER DB_HOST=$DB_HOST DB_PASSWORD_LEN=$PW_LEN"
+          if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
+            echo "[db-preflight][warn] Missing DB constants; continuing"
+            exit 0
+          fi
+          # Create and run a remote PHP probe (avoids exposing password in logs)
+          PROBE="<?php @include '$CFG_PATH'; \$t=@mysqli_connect(DB_HOST, DB_USER, DB_PASSWORD, DB_NAME); if(!\$t){echo 'CONNECT_FAIL:' . (mysqli_connect_errno()).' '.mysqli_connect_error();} else {echo 'CONNECT_OK'; mysqli_close(\$t);} ?>"
+          RESULT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -d display_errors=0 -r \"$PROBE\"" 2>/dev/null || true)
+          echo "[db-preflight] Result=$RESULT"
+          if echo "$RESULT" | grep -q 'CONNECT_FAIL'; then
+            echo "[db-preflight][fatal] Database connection failing; aborting deploy to avoid serving broken state." >&2
+            exit 1
+          fi
+          echo "[db-preflight] OK (database reachable)"
+        env:
+          HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+          HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+          HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+          HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
       - name: Pre-audit remote environment
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
@@ -385,7 +369,7 @@ jobs:
           for p in "${PLUGS[@]}"; do
             p=$(echo "$p" | xargs) # trim whitespace
             [ -z "$p" ] && continue
-            case "$p" in 
+            case "$p" in
               .*|*/*) echo "[plugins] Skip invalid slug '$p'"; continue;;
             esac
             SRC="$HOSTINGER_PATH/wp-content/plugins/$p"
@@ -924,12 +908,12 @@ jobs:
           # Exclude remote-only or dynamically generated directories that are not tracked in the repo but required in production.
           # These paths existed on production (e.g. asset/CSS generation or custom platform code) and were likely removed by --delete, causing homepage fatal errors.
           RSYNC_EXCLUDES+=("core" "storage")
-          
+
           # Guard: detect ONLY top-level accidental self-nested duplicate directories (./name/name) to exclude
           # This avoids excluding legitimate vendor paths like twig/twig inside plugins.
           SELF_NESTED=$(find . -maxdepth 2 -mindepth 2 -type d -regextype posix-extended -regex './([^/]+)/\1$' | sed 's#^./##' | grep -v '^.git' || true)
           if [ -n "$SELF_NESTED" ]; then
-            echo "[guard] Detected top-level self-nested duplicate directories; excluding from deployment:" 
+            echo "[guard] Detected top-level self-nested duplicate directories; excluding from deployment:"
             echo "$SELF_NESTED" | sed 's/^/  - /'
             while IFS= read -r d; do
               RSYNC_EXCLUDES+=("$d")
@@ -943,7 +927,7 @@ jobs:
           command -v nc >/dev/null && nc -vz -w5 "$HOSTINGER_SSH_HOST" "$HOSTINGER_SSH_PORT" || echo "[warn] nc not available or port check failed (may still work)"
           echo "[deploy] Connectivity test (ssh banner)..." || true
           ssh -o BatchMode=yes -o ConnectTimeout=10 -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" 'echo [remote] ssh ok' || { echo "[error] SSH connection failed. Verify HOSTINGER_* secrets, firewall, and that the key is installed."; exit 1; }
-          echo "[deploy] Starting rsync..." 
+          echo "[deploy] Starting rsync..."
           # Make --delete optional to avoid wiping remote-only directories (like core/, storage/) by default.
           # Enable deletion only if DELETE_REMOTE is explicitly set to 'true'.
           DELETE_FLAG=""
@@ -1300,7 +1284,7 @@ jobs:
             exit 1
           fi
           if ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "[ -d '$PLUG_DIR' ]"; then
-            echo "[litespeed-assert] Directory exists (likely stub); listing for verification:" 
+            echo "[litespeed-assert] Directory exists (likely stub); listing for verification:"
             ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "ls -1A '$PLUG_DIR' 2>/dev/null | sed 's/^/[litespeed-assert][stub] /'" || true
           else
             echo "[litespeed-assert] No litespeed-cache directory present (expected after exclusion)"
@@ -1367,9 +1351,6 @@ jobs:
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
           HOSTINGER_PATH: ${{ secrets.HOSTINGER_PATH }}
           RUN_WP_CLI_CACHE_FLUSH: ${{ secrets.RUN_WP_CLI_CACHE_FLUSH || 'false' }}
-
-
-  # Removed premature marker artifact upload; marker is only created after smoke tests now.
 
       - name: Toggle WP_DEBUG (optional)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.toggle_debug != 'none' && github.event.inputs.toggle_debug != '' }}
@@ -1453,7 +1434,7 @@ jobs:
             *) PATH_PART="/$PATH_PART" ;;
           esac
           URL="${PRODUCTION_URL%/}$PATH_PART"
-          echo "[deploy] Health check: $URL" 
+          echo "[deploy] Health check: $URL"
           curl -I -L --max-time 20 --retry 2 --retry-delay 3 "$URL" | sed 's/^/[health]/' || { echo '[error] Health check failed'; exit 1; }
         env:
           PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
@@ -1562,7 +1543,7 @@ jobs:
       - name: Record deployment marker (post-smoke)
         if: ${{ success() && github.event.inputs.audit != 'true' && github.event.inputs.dry_run != 'true' }}
         run: |
-          echo "[deploy] Writing enriched .deploy-info.json marker with commit $GITHUB_SHA (includes smoke hashes)" 
+          echo "[deploy] Writing enriched .deploy-info.json marker with commit $GITHUB_SHA (includes smoke hashes)"
           if [ -z "$HOSTINGER_PATH" ]; then echo "[error] HOSTINGER_PATH not set"; exit 1; fi
           CLEAN_PATH=$(printf '%s' "$HOSTINGER_PATH" | tr -d '\r' | sed -e 's/[[:space:]]*$//')
           HOSTINGER_PATH="$CLEAN_PATH"
@@ -1595,7 +1576,7 @@ jobs:
           echo "[deploy][wp_cache] total=$WP_CACHE_TOTAL true=$WP_CACHE_TRUE false=$WP_CACHE_FALSE cfg_path=$CFG_PATH"
           # Retrieve active_plugins option (JSON array)
           ACTIVE_PLUGINS_JSON=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -r 'error_reporting(E_ERROR); $p=getenv(\"WP_ROOT\")?:\"$HOSTINGER_PATH\"; $l=$p.\"/wp-load.php\"; if(!file_exists($l)){echo \"[]\"; exit;} include $l; $ap=get_option(\"active_plugins\"); if(!is_array($ap)){$ap=[];} echo json_encode(array_values($ap));'" 2>/dev/null || echo '[]')
-          case "$ACTIVE_PLUGINS_JSON" in 
+          case "$ACTIVE_PLUGINS_JSON" in
             \[*\]) : ;; # looks like JSON array
             *) ACTIVE_PLUGINS_JSON='[]';;
           esac
