@@ -109,9 +109,11 @@ jobs:
           chmod 700 ~/.ssh
           ssh-keyscan -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_HOST" >> ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+
 
       - name: Early remote connectivity marker
         run: |
