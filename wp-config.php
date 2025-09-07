@@ -21,16 +21,17 @@
 
 // ** Database settings - You can get this info from your web host ** //
 /** The name of the database for WordPress */
-define( 'DB_NAME', 'u753768407_GS8iP' );
+define( 'DB_NAME', getenv( 'DB_NAME' ) ?: 'wpdb' );
 
 /** Database username */
-define( 'DB_USER', 'u753768407_pDpFM' );
+define( 'DB_USER', getenv( 'DB_USER' ) ?: 'wpuser' );
 
 /** Database password */
-define( 'DB_PASSWORD', 'Utembeeds875@' );
+define( 'DB_PASSWORD', getenv( 'DB_PASSWORD' ) ?: 'wpsecret' );
 
 /** Database hostname */
-define( 'DB_HOST', 'srv582.hstgr.io' );
+define( 'DB_HOST', getenv( 'DB_HOST' ) ?: 'localhost' );
+
 
 /** Database charset to use in creating database tables. */
 define( 'DB_CHARSET', 'utf8' );
@@ -72,8 +73,13 @@ $table_prefix = 'wp_';
 
 
 /* Add any custom values between this line and the "stop editing" line. */
-define( 'WP_HOME', 'https://aktonz.com' );
-define( 'WP_SITEURL', 'https://aktonz.com' );
+if ( getenv( 'WP_HOME' ) ) {
+    define( 'WP_HOME', getenv( 'WP_HOME' ) );
+}
+if ( getenv( 'WP_SITEURL' ) ) {
+    define( 'WP_SITEURL', getenv( 'WP_SITEURL' ) );
+}
+
 
 
 /**
