@@ -32,6 +32,7 @@ define( 'DB_PASSWORD', getenv( 'DB_PASSWORD' ) ?: 'wpsecret' );
 /** Database hostname */
 define( 'DB_HOST', getenv( 'DB_HOST' ) ?: 'localhost' );
 
+
 /** Database charset to use in creating database tables. */
 define( 'DB_CHARSET', 'utf8' );
 
@@ -78,6 +79,7 @@ if ( getenv( 'WP_HOME' ) ) {
 if ( getenv( 'WP_SITEURL' ) ) {
     define( 'WP_SITEURL', getenv( 'WP_SITEURL' ) );
 }
+
 
 
 /**
