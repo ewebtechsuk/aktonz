@@ -107,13 +107,16 @@ jobs:
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
+          ssh-keygen -R "[$HOSTINGER_SSH_HOST]:$HOSTINGER_SSH_PORT" 2>/dev/null || true
           ssh-keyscan -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_HOST" >> ~/.ssh/known_hosts
+          sort -u ~/.ssh/known_hosts -o ~/.ssh/known_hosts
           chmod 600 ~/.ssh/known_hosts
+          echo "known_hosts contents:"
+          cat ~/.ssh/known_hosts
 
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
-
 
       - name: Early remote connectivity marker
         run: |
@@ -136,11 +139,21 @@ jobs:
           if [ -z "$CFG_PATH" ]; then echo "[db-preflight][warn] wp-config.php not found; continuing (cannot validate DB)"; exit 0; fi
           echo "[db-preflight] Using wp-config: $CFG_PATH"
           # Extract constants
-          extract(){ ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'${1}'\\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" 2>/dev/null || true; }
+          extract() {
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" \
+              "grep -E \"define\\( *'${1}'\" '$CFG_PATH' | sed -E \"s/.*'${1}' *, *'([^']+)'.*/\\1/\" | head -n1" \
+              2>/dev/null || true
+          }
           DB_NAME=$(extract DB_NAME)
           DB_USER=$(extract DB_USER)
-            DB_HOST=$(extract DB_HOST)
-          PW_LEN=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "grep -E \"define\\( *'DB_PASSWORD'\\" '$CFG_PATH' | sed -E \"s/.*'DB_PASSWORD' *, *'([^']*)'.*/\\1/\" | awk '{print length($0)}'" 2>/dev/null || echo 0)
+          DB_HOST=$(extract DB_HOST)
+          PW_LEN=$(
+            ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" \
+              "grep -E \"define\( *'DB_PASSWORD'\" '$CFG_PATH' | \
+               sed -E \"s/.*'DB_PASSWORD' *, *'([^']*)'.*/\1/\" | \
+               awk '{print length(\$0)}'" \
+            2>/dev/null || echo 0
+          )
           echo "[db-preflight] DB_NAME=$DB_NAME DB_USER=$DB_USER DB_HOST=$DB_HOST DB_PASSWORD_LEN=$PW_LEN"
           if [ -z "$DB_HOST" ] || [ -z "$DB_NAME" ] || [ -z "$DB_USER" ]; then
             echo "[db-preflight][warn] Missing DB constants; continuing"
@@ -152,6 +165,7 @@ jobs:
           echo "[db-preflight] Result=$RESULT"
           if echo "$RESULT" | grep -q 'CONNECT_FAIL'; then
             echo "::warning::[db-preflight] Database connection failing; continuing without DB validation." >&2
+
           else
             echo "[db-preflight] OK (database reachable)"
           fi
@@ -1579,7 +1593,7 @@ jobs:
           fi
           echo "[deploy][wp_cache] total=$WP_CACHE_TOTAL true=$WP_CACHE_TRUE false=$WP_CACHE_FALSE cfg_path=$CFG_PATH"
           # Retrieve active_plugins option (JSON array)
-          ACTIVE_PLUGINS_JSON=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -r 'error_reporting(E_ERROR); $p=getenv(\"WP_ROOT\")?:\"$HOSTINGER_PATH\"; $l=$p.\"/wp-load.php\"; if(!file_exists($l)){echo \"[]\"; exit;} include $l; $ap=get_option(\"active_plugins\"); if(!is_array($ap)){$ap=[];} echo json_encode(array_values($ap));'" 2>/dev/null || echo '[]')
+          ACTIVE_PLUGINS_JSON=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -r 'error_reporting(E_ERROR); \$p=getenv(\"WP_ROOT\")?:\"$HOSTINGER_PATH\"; \$l=\$p.\"/wp-load.php\"; if(!file_exists(\$l)){echo \"[]\"; exit;} include \$l; \$ap=get_option(\"active_plugins\"); if(!is_array(\$ap)){\$ap=[];} echo json_encode(array_values(\$ap));'" 2>/dev/null || echo '[]')
           case "$ACTIVE_PLUGINS_JSON" in
             \[*\]) : ;; # looks like JSON array
             *) ACTIVE_PLUGINS_JSON='[]';;
