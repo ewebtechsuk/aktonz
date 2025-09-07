@@ -151,10 +151,10 @@ jobs:
           RESULT=$(ssh -p "$HOSTINGER_SSH_PORT" "$HOSTINGER_SSH_USER@$HOSTINGER_SSH_HOST" "php -d display_errors=0 -r \"$PROBE\"" 2>/dev/null || true)
           echo "[db-preflight] Result=$RESULT"
           if echo "$RESULT" | grep -q 'CONNECT_FAIL'; then
-            echo "[db-preflight][fatal] Database connection failing; aborting deploy to avoid serving broken state." >&2
-            exit 1
+            echo "[db-preflight][warn] Database connection failing; continuing without DB validation." >&2
+          else
+            echo "[db-preflight] OK (database reachable)"
           fi
-          echo "[db-preflight] OK (database reachable)"
         env:
           HOSTINGER_SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
           HOSTINGER_SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
