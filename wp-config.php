@@ -21,16 +21,16 @@
 
 // ** Database settings - You can get this info from your web host ** //
 /** The name of the database for WordPress */
-define( 'DB_NAME', 'wpdb' );
+define( 'DB_NAME', getenv( 'DB_NAME' ) ?: 'wpdb' );
 
 /** Database username */
-define( 'DB_USER', 'wpuser' );
+define( 'DB_USER', getenv( 'DB_USER' ) ?: 'wpuser' );
 
 /** Database password */
-define( 'DB_PASSWORD', 'wpsecret' );
+define( 'DB_PASSWORD', getenv( 'DB_PASSWORD' ) ?: 'wpsecret' );
 
 /** Database hostname */
-define( 'DB_HOST', 'localhost' ); // changed from docker-style host 'db:3306'
+define( 'DB_HOST', getenv( 'DB_HOST' ) ?: 'localhost' );
 
 /** Database charset to use in creating database tables. */
 define( 'DB_CHARSET', 'utf8' );
@@ -72,7 +72,12 @@ $table_prefix = 'wp_';
 
 
 /* Add any custom values between this line and the "stop editing" line. */
-
+if ( getenv( 'WP_HOME' ) ) {
+    define( 'WP_HOME', getenv( 'WP_HOME' ) );
+}
+if ( getenv( 'WP_SITEURL' ) ) {
+    define( 'WP_SITEURL', getenv( 'WP_SITEURL' ) );
+}
 
 
 /**
@@ -88,8 +93,10 @@ $table_prefix = 'wp_';
  * @link https://wordpress.org/support/article/debugging-in-wordpress/
  */
 if ( ! defined( 'WP_DEBUG' ) ) {
-	define( 'WP_DEBUG', false );
+    define( 'WP_DEBUG', true );
 }
+define( 'WP_DEBUG_LOG', true );
+define( 'WP_DEBUG_DISPLAY', false );
 
 /* That's all, stop editing! Happy publishing. */
 
@@ -109,3 +116,6 @@ if (file_exists(__DIR__.'/.env')) {
         }
     }
 }
+// Managed by CI: force disable page/object cache while troubleshooting
+// Managed by CI: enforce single WP_CACHE false (validation stage)
+if ( ! defined( 'WP_CACHE' ) ) { define( 'WP_CACHE', false ); }
