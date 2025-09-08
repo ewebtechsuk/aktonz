@@ -56,6 +56,7 @@ jobs:
 
       - name: Setup SSH key
         if: steps.prereqs.outputs.continue == 'true'
+
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
@@ -63,6 +64,7 @@ jobs:
 
       - name: Run remote snapshot
         if: steps.prereqs.outputs.continue == 'true'
+
         env:
           SNAPSHOT_TARBALL: ${{ env.SNAPSHOT_INCLUDE_TARBALL == 'true' && '1' || '0' }}
         run: |
@@ -71,6 +73,7 @@ jobs:
 
       - name: Drift / residue guard
         if: steps.prereqs.outputs.continue == 'true'
+
         run: |
           set -euo pipefail
           dir=$(ls -1d snapshot_* | tail -n1)
@@ -98,6 +101,7 @@ jobs:
 
       - name: Upload snapshot artifacts
         if: steps.prereqs.outputs.continue == 'true'
+
         uses: actions/upload-artifact@v4
         with:
           name: remote-snapshot
