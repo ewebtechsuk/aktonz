@@ -108,6 +108,14 @@ $property_images = $details->images ?? [];
     padding: 1.5rem;
     margin-bottom: 2rem;
 }
+.property-key-features,
+.property-note,
+.property-further-details,
+#property-details-epcs {
+    margin-bottom: 2rem;
+}
+.property-note textarea { resize: vertical; }
+.property-further-details th { width: 40%; }
 .property-media-tabs .media-tabs-nav {
     display: flex;
     gap: 1rem;
@@ -199,59 +207,80 @@ $property_images = $details->images ?? [];
                         <iframe width="100%" height="400" style="border:0;" loading="lazy" referrerpolicy="no-referrer-when-downgrade" src="https://www.google.com/maps?q=<?=urlencode($details->displayAddress)?>&output=embed"></iframe>
                     </div>
                 </div>
+                <?php if($details->bullets) { ?>
+                <section class="property-key-features">
+                    <h3 class="text-brand mb-3" dir="auto"><i class="fa fa-star text-warning"></i> <?=htmlspecialchars(__('Key Features', $text_domain))?></h3>
+                    <ul class="property-features-list">
+                        <?php foreach($details->bullets as $bullet) { ?>
+                        <li dir="auto">
+                            <i class="fa fa-check-circle text-success"></i>
+                            <span class="bullet-text"> <?=htmlspecialchars($bullet)?></span>
+                        </li>
+                        <?php } ?>
+                    </ul>
+                </section>
+                <?php } ?>
+                <section class="property-note">
+                    <h3 class="text-brand mb-3" dir="auto"><?=htmlspecialchars(__('Add a note', $text_domain))?></h3>
+                    <textarea id="property-note" class="form-control" rows="3"></textarea>
+                    <button id="save-note-btn" class="btn btn-outline-secondary mt-2"><?=htmlspecialchars(__('Save', $text_domain))?></button>
+                    <div id="note-saved" class="text-success small mt-1" style="display:none;"><?=htmlspecialchars(__('Saved', $text_domain))?></div>
+                </section>
+                <?php if(!empty($details->details)) { ?>
+                <section class="property-further-details">
+                    <h3 class="text-brand mb-3" dir="auto"><?=htmlspecialchars(__('Further details', $text_domain))?></h3>
+                    <table class="table table-striped property-details-table">
+                        <?php foreach($details->details as $k => $v) { ?>
+                        <tr>
+                            <th><?=htmlspecialchars($k)?></th>
+                            <td><?=htmlspecialchars(is_scalar($v) ? $v : '')?></td>
+                        </tr>
+                        <?php } ?>
+                    </table>
+                </section>
+                <?php } ?>
+                <?php if($details->epcs) { ?>
+                <section id="property-details-epcs">
+                    <h3 class="text-brand mb-3" dir="auto"><?=htmlspecialchars(__('Energy Performance Certificates', $text_domain))?></h3>
+                    <?php foreach($details->epcs as $epc) { ?>
+                    <img class="img-fluid mb-3" src="<?=htmlspecialchars($epc->url)?>" alt="<?=htmlspecialchars($epc->caption ?? 'EPC')?>" />
+                    <?php } ?>
+                </section>
+                <?php } ?>
                 <div class="property-description">
-                    <h4 class="text-brand mb-3" dir="auto"><?=htmlspecialchars(__("Description", $text_domain))?></h4>
+                    <h4 class="text-brand mb-3" dir="auto"><?=htmlspecialchars(__('Description', $text_domain))?></h4>
                     <?php if($details->description) { ?>
                         <p dir="auto" class="mb-2"><?=htmlspecialchars($description_line_1)?></p>
                         <?php foreach($description_lines as $line) { ?>
                             <p dir="auto" class="mb-2"><?=$apex27->format_text($line)?></p>
                         <?php } ?>
                     <?php } else { ?>
-                        <p dir="auto"><em><?=htmlspecialchars(__("No description is available for this property.", $text_domain))?></em></p>
+                        <p dir="auto"><em><?=htmlspecialchars(__('No description is available for this property.', $text_domain))?></em></p>
                     <?php } ?>
                 </div>
-                <div class="row g-3 mb-4">
-                    <?php if($details->epcs) { ?>
-                    <div class="col-12 col-md-6">
-                        <a href="#property-details-epcs" class="btn btn-outline-brand w-100" data-type="epcs">
-                            <i class="fa fa-bolt"></i> <?=htmlspecialchars(__("EPC", $text_domain))?>
-                        </a>
-                    </div>
-                    <?php } ?>
-                    <?php if($details->brochures) {
-                        $brochure_count = count($details->brochures);
-                        if($brochure_count > 1) { ?>
-                        <div class="col-12 col-md-6">
-                            <a href="#property-details-brochures" class="btn btn-outline-brand w-100" data-type="brochures">
-                                <i class="fa fa-file-pdf"></i> <?=htmlspecialchars(__("Brochures", $text_domain))?>
-                            </a>
-                        </div>
-                        <?php } else {
-                            $brochure = $details->brochures[0]; ?>
-                        <div class="col-12 col-md-6">
-                            <a href="<?=htmlspecialchars($brochure->url)?>" class="btn btn-outline-brand w-100" target="_blank">
-                                <i class="fa fa-file-pdf"></i> <?=htmlspecialchars(__("Brochure", $text_domain))?>
-                            </a>
-                        </div>
-                        <?php }
-                    } ?>
-                </div>
-            </div>
-            <div class="col-lg-4">
-                <div class="sticky-sidebar">
-                    <?php if($details->bullets) { ?>
-                    <div class="mb-4">
-                        <h3 class="text-brand mt-0 mb-3" dir="auto"><i class="fa fa-star text-warning"></i> <?=htmlspecialchars(__("Key Features", $text_domain))?></h3>
-                        <ul class="property-features-list">
-                            <?php foreach($details->bullets as $bullet) { ?>
-                                <li dir="auto">
-                                    <i class="fa fa-check-circle text-success"></i>
-                                    <span class="bullet-text"> <?=htmlspecialchars($bullet)?></span>
-                                </li>
+                <?php if($details->brochures) {
+                    $brochure_count = count($details->brochures);
+                    if($brochure_count > 1) { ?>
+                    <div class="mb-4" id="property-details-brochures">
+                        <h3 class="text-brand mb-3" dir="auto"><?=htmlspecialchars(__('Brochures', $text_domain))?></h3>
+                        <ul class="list-unstyled">
+                            <?php foreach($details->brochures as $brochure) { ?>
+                            <li><a href="<?=htmlspecialchars($brochure->url)?>" target="_blank"><i class="fa fa-file-pdf"></i> <?=htmlspecialchars($brochure->name ?? __('Brochure', $text_domain))?></a></li>
                             <?php } ?>
                         </ul>
                     </div>
-                    <?php } ?>
+                    <?php } else {
+                        $brochure = $details->brochures[0]; ?>
+                    <div class="mb-4" id="property-details-brochures">
+                        <a href="<?=htmlspecialchars($brochure->url)?>" class="btn btn-outline-brand" target="_blank">
+                            <i class="fa fa-file-pdf"></i> <?=htmlspecialchars(__('Brochure', $text_domain))?>
+                        </a>
+                    </div>
+                    <?php }
+                } ?>
+            </div>
+            <div class="col-lg-4">
+                <div class="sticky-sidebar">
                     <div class="mb-4">
                         <?php $apex27->include_template($form_path, ["property_details" => $details]); ?>
                     </div>
@@ -358,6 +387,21 @@ function closeViewingForm() {
             }
         });
     });
+})();
+(function(){
+    var noteKey = 'apex27-note-' + <?=json_encode($details->id ?? '')?>;
+    var textarea = document.getElementById('property-note');
+    var saved = document.getElementById('note-saved');
+    var btn = document.getElementById('save-note-btn');
+    if(textarea && btn){
+        textarea.value = localStorage.getItem(noteKey) || '';
+        btn.addEventListener('click', function(e){
+            e.preventDefault();
+            localStorage.setItem(noteKey, textarea.value);
+            saved.style.display='block';
+            setTimeout(function(){ saved.style.display='none'; }, 2000);
+        });
+    }
 })();
 </script>
 <!-- If using Bootstrap 5, ensure JS is loaded for carousel -->
