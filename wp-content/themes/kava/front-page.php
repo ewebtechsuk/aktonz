@@ -17,14 +17,14 @@ get_header();
         <p><?php bloginfo( 'description' ); ?></p>
         <?php get_search_form(); ?>
         <a class="cta-button" href="<?php echo esc_url( get_post_type_archive_link( 'post' ) ); ?>">
-            <?php _e( 'Browse All Posts', 'kava' ); ?>
+            <?php esc_html_e( 'Browse All Posts', 'kava' ); ?>
         </a>
     </div>
 </section>
 
 <section class="featured-properties">
     <div class="container">
-        <h2><?php _e( 'Featured Listings', 'kava' ); ?></h2>
+        <h2><?php esc_html_e( 'Featured Listings', 'kava' ); ?></h2>
         <?php
         $featured = new WP_Query( array(
             'post_type'      => 'post',
@@ -46,7 +46,7 @@ get_header();
             echo '</div>';
             wp_reset_postdata();
         else :
-            _e( 'No listings found.', 'kava' );
+            esc_html_e( 'No listings found.', 'kava' );
         endif;
         ?>
     </div>
@@ -54,4 +54,4 @@ get_header();
 
 <?php
 get_footer();
-?>
+
