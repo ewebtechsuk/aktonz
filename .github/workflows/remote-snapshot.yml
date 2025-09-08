@@ -35,27 +35,36 @@ jobs:
       SNAPSHOT_INCLUDE_TARBALL: ${{ github.event_name == 'workflow_dispatch' && inputs.include_tarball || 'true' }}
     steps:
       - name: Check required secrets
-        id: check
+        id: prereqs
         run: |
-          if [[ -n "$HOSTINGER_SSH_HOST" && -n "$HOSTINGER_SSH_USER" && -n "$HOSTINGER_SSH_PORT" && -n "$HOSTINGER_PATH" && -n "$HOSTINGER_SSH_KEY" ]]; then
-            echo "secrets_present=true" >> "$GITHUB_OUTPUT"
+          missing=0
+          for s in HOSTINGER_SSH_HOST HOSTINGER_SSH_USER HOSTINGER_SSH_PORT HOSTINGER_PATH HOSTINGER_SSH_KEY; do
+            if [ -z "${!s:-}" ]; then
+              echo "[secrets][warn] $s not set"
+              missing=1
+            fi
+          done
+          if [ "$missing" -eq 0 ]; then
+            echo "continue=true" >>"$GITHUB_OUTPUT"
           else
-            echo "One or more required secrets are missing; skipping snapshot."
-            echo "secrets_present=false" >> "$GITHUB_OUTPUT"
+            echo "continue=false" >>"$GITHUB_OUTPUT"
           fi
+
       - name: Checkout
-        if: steps.check.outputs.secrets_present == 'true'
+        if: steps.prereqs.outputs.continue == 'true'
         uses: actions/checkout@v4
 
       - name: Setup SSH key
-        if: steps.check.outputs.secrets_present == 'true'
+        if: steps.prereqs.outputs.continue == 'true'
+
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.HOSTINGER_SSH_KEY }}
           log-public-key: false
 
       - name: Run remote snapshot
-        if: steps.check.outputs.secrets_present == 'true'
+        if: steps.prereqs.outputs.continue == 'true'
+
         env:
           SNAPSHOT_TARBALL: ${{ env.SNAPSHOT_INCLUDE_TARBALL == 'true' && '1' || '0' }}
         run: |
@@ -63,7 +72,8 @@ jobs:
           scripts/remote_snapshot.sh
 
       - name: Drift / residue guard
-        if: steps.check.outputs.secrets_present == 'true'
+        if: steps.prereqs.outputs.continue == 'true'
+
         run: |
           set -euo pipefail
           dir=$(ls -1d snapshot_* | tail -n1)
@@ -90,7 +100,8 @@ jobs:
             echo "One or more drift conditions met (failing job)."; exit 1; else echo "No critical drift (or permissive mode)."; fi
 
       - name: Upload snapshot artifacts
-        if: steps.check.outputs.secrets_present == 'true'
+        if: steps.prereqs.outputs.continue == 'true'
+
         uses: actions/upload-artifact@v4
         with:
           name: remote-snapshot
