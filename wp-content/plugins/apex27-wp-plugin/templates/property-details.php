@@ -37,25 +37,47 @@ $property_images = $details->images ?? [];
     margin-bottom: 2rem;
     padding: 2rem;
 }
-.property-main-image {
+.property-image-slider {
+    position: relative;
+}
+.property-slider-image {
+    display: none;
     width: 100%;
     height: 400px;
     object-fit: cover;
     border-radius: 1rem;
-    margin-bottom: 1rem;
     background: #f8f9fa;
+    margin-bottom: 1rem;
     transition: opacity 0.2s;
 }
-.property-media-tabs .carousel-item img {
-    width: 100%;
+.property-slider-image.active {
+    display: block;
 }
+.property-image-slider .slider-control {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(0,0,0,0.5);
+    color: #fff;
+    border: none;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+}
+.property-image-slider .slider-prev { left: 10px; }
+.property-image-slider .slider-next { right: 10px; }
 @media (max-width: 991px) {
-    .property-main-image { height: 250px; }
+    .property-slider-image { height: 250px; }
 }
 @media (max-width: 575px) {
-    .property-main-image { height: 180px; }
-    .property-media-tabs .carousel,
-    .property-media-tabs .carousel-item img {
+    .property-slider-image { height: 180px; }
+    .property-media-tabs .property-image-slider,
+    .property-media-tabs .property-slider-image {
+
         width: 100vw;
         margin-left: calc(50% - 50vw);
     }
@@ -130,7 +152,9 @@ $property_images = $details->images ?? [];
     <div class="container">
         <div class="row g-4 mt-4">
             <div class="col-lg-7">
-              <div class="property-media-tabs mb-4">
+
+
+                <div class="property-media-tabs mb-4">
                     <div class="media-tabs-nav">
                         <button class="media-tab-btn active" data-target="photos">Photos</button>
                         <?php if($details->floorplans) { ?>
@@ -140,23 +164,14 @@ $property_images = $details->images ?? [];
                     </div>
                     <?php if($property_images) { ?>
                     <div id="tab-photos" class="media-tab-content active">
-                        <div id="propertyImageCarousel" class="carousel slide" data-bs-ride="carousel">
-                            <div class="carousel-inner">
-                                <?php foreach($property_images as $idx => $img) { ?>
-                                <div class="carousel-item<?=$idx === 0 ? ' active' : ''?>">
-                                    <img class="d-block w-100 property-main-image" src="<?=htmlspecialchars($img->url)?>" alt="<?=htmlspecialchars($img->caption ?? $details->displayAddress)?>" />
-                                </div>
-                                <?php } ?>
-                            </div>
+                        <div id="propertyImageSlider" class="property-image-slider">
+                            <?php foreach($property_images as $idx => $img) { ?>
+                            <img class="property-slider-image<?=$idx === 0 ? ' active' : ''?>" src="<?=htmlspecialchars($img->url)?>" alt="<?=htmlspecialchars($img->caption ?? $details->displayAddress)?>" />
+                            <?php } ?>
                             <?php if(count($property_images) > 1) { ?>
-                            <button class="carousel-control-prev" type="button" data-bs-target="#propertyImageCarousel" data-bs-slide="prev">
-                                <span class="carousel-control-prev-icon" aria-hidden="true"></span>
-                                <span class="visually-hidden"><?=htmlspecialchars(__('Previous', $text_domain))?></span>
-                            </button>
-                            <button class="carousel-control-next" type="button" data-bs-target="#propertyImageCarousel" data-bs-slide="next">
-                                <span class="carousel-control-next-icon" aria-hidden="true"></span>
-                                <span class="visually-hidden"><?=htmlspecialchars(__('Next', $text_domain))?></span>
-                            </button>
+                            <button class="slider-control slider-prev" type="button" aria-label="<?=htmlspecialchars(__('Previous', $text_domain))?>">&#10094;</button>
+                            <button class="slider-control slider-next" type="button" aria-label="<?=htmlspecialchars(__('Next', $text_domain))?>">&#10095;</button>
+
                             <?php } ?>
                         </div>
                     </div>
@@ -386,22 +401,22 @@ function showOfferForm() {
     }
 })();
 (function(){
-    var noteKey = 'apex27-note-' + <?=json_encode($details->id ?? '')?>;
-    var textarea = document.getElementById('property-note');
-    var saved = document.getElementById('note-saved');
-    var btn = document.getElementById('save-note-btn');
-    if(textarea && btn){
-        textarea.value = localStorage.getItem(noteKey) || '';
-        btn.addEventListener('click', function(e){
-            e.preventDefault();
-            localStorage.setItem(noteKey, textarea.value);
-            saved.style.display='block';
-            setTimeout(function(){ saved.style.display='none'; }, 2000);
-        });
+    var slider = document.getElementById('propertyImageSlider');
+    if(!slider) return;
+    var images = slider.querySelectorAll('.property-slider-image');
+    var prev = slider.querySelector('.slider-prev');
+    var next = slider.querySelector('.slider-next');
+    var index = 0;
+    function show(i){
+        images[index].classList.remove('active');
+        index = (i + images.length) % images.length;
+        images[index].classList.add('active');
     }
+    if(prev) prev.addEventListener('click', function(){ show(index-1); });
+    if(next) next.addEventListener('click', function(){ show(index+1); });
+
 })();
 </script>
-<!-- If using Bootstrap 5, ensure JS is loaded for carousel -->
 <?php
 // --- Additional Aktonz-style sections (CTA, related properties, local intelligence) ---
 ?>
