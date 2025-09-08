@@ -98,7 +98,7 @@ if ( ! defined( 'WP_DEBUG' ) ) {
     define( 'WP_DEBUG', true );
 }
 // Log debug messages to a file in wp-content for easier troubleshooting.
-define( 'WP_DEBUG_LOG', __DIR__ . '/wp-content/debug.log' );
+define( 'WP_DEBUG_LOG', true );
 define( 'WP_DEBUG_DISPLAY', false );
 
 /* That's all, stop editing! Happy publishing. */
