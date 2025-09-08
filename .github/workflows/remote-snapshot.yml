@@ -16,6 +16,8 @@ permissions:
 
 jobs:
   snapshot:
+    # Skip job entirely if required secrets are missing
+    if: ${{ secrets.HOSTINGER_SSH_HOST != '' && secrets.HOSTINGER_SSH_USER != '' && secrets.HOSTINGER_SSH_PORT != '' && secrets.HOSTINGER_PATH != '' && secrets.HOSTINGER_SSH_KEY != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
