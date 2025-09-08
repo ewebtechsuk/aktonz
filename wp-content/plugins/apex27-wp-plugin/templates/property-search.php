@@ -1,7 +1,7 @@
 <?php
 /**
  * Template Name: Search Results (Enhanced Grid)
- * Foxtons‑inspired property search layout adapted to Aktonz brand.
+ * Aktonz‑inspired property search layout adapted to Aktonz brand.
  *
  * @var Apex27 $apex27
  */
