@@ -29,8 +29,8 @@ html {
 }
 
 body {
-	margin: 0;
-	background-color: white;
+        margin: 0;
+        background-color: white;
 }
 
 article,
@@ -1697,5 +1697,59 @@ html {
 }
 .featured-properties article {
     width: 280px;
+    text-align: center;
+}
+
+/* Aktonz homepage sections */
+.aktonz-hero {
+    text-align: center;
+    padding: 60px 0;
+    background: #f5f5f5;
+}
+
+.aktonz-stats {
+    background: #ffffff;
+    padding: 40px 0;
+}
+.aktonz-stats .stats-grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 20px;
+}
+.aktonz-stats .stat {
+    flex: 1 1 200px;
+    text-align: center;
+}
+.aktonz-stats .stat-number {
+    font-size: 2rem;
+    font-weight: bold;
+    display: block;
+}
+
+.aktonz-selling {
+    background: #fffbef;
+    text-align: center;
+    padding: 40px 0;
+}
+.aktonz-selling .cta-button {
+    margin-top: 20px;
+}
+
+.aktonz-search {
+    padding: 40px 0;
+    text-align: center;
+}
+
+.aktonz-testimonials {
+    background: #f9f9f9;
+    padding: 40px 0;
+}
+.aktonz-testimonials blockquote {
+    max-width: 600px;
+    margin: 0 auto;
     text-align: center;
 }
