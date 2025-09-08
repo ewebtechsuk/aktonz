@@ -29,7 +29,10 @@ env:
 jobs:
   snapshot:
     # Skip job entirely if required secrets are missing
-    if: ${{ secrets.HOSTINGER_SSH_HOST != '' && secrets.HOSTINGER_SSH_USER != '' && secrets.HOSTINGER_SSH_PORT != '' && secrets.HOSTINGER_PATH != '' && secrets.HOSTINGER_SSH_KEY != '' }}
+    # GitHub expressions at the job level do not expose the `secrets` context.
+    # Populate env vars above from secrets and reference them here instead so
+    # the job is skipped gracefully when any required secret is unset.
+    if: ${{ env.HOSTINGER_SSH_HOST != '' && env.HOSTINGER_SSH_USER != '' && env.HOSTINGER_SSH_PORT != '' && env.HOSTINGER_PATH != '' && env.HOSTINGER_SSH_KEY != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
