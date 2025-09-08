@@ -362,10 +362,10 @@ function closeViewingForm() {
 </script>
 <!-- If using Bootstrap 5, ensure JS is loaded for carousel -->
 <?php
-// --- Additional Foxtons-style sections (CTA, related properties, local intelligence) ---
+// --- Additional Aktonz-style sections (CTA, related properties, local intelligence) ---
 ?>
 <style>
-/* Foxtons-inspired extended layout */
+/* Aktonz-inspired extended layout */
 .apex27-section { padding: 3rem 0; }
 .apex27-section.alt { background:#00665a; color:#fff; }
 .apex27-section.alt h2,.apex27-section.alt h3 { color:#fff; }
