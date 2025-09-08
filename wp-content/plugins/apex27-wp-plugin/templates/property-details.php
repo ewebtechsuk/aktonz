@@ -271,6 +271,7 @@ $property_images = $details->images ?? [];
                         <a href="<?=htmlspecialchars($brochure->url)?>" class="btn btn-outline-brand" target="_blank">
                             <i class="fa fa-file-pdf"></i> <?=htmlspecialchars(__('Brochure', $text_domain))?>
                         </a>
+
                     </div>
                     <?php }
                 } ?>
