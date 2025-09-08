@@ -1703,12 +1703,18 @@ html {
 /* Aktonz homepage sections */
 .aktonz-hero {
     text-align: center;
-    padding: 60px 0;
-    background: #f5f5f5;
+    padding: 100px 0;
+    background: url('https://images.unsplash.com/photo-1528909514045-2fa4ac7a08ba?auto=format&fit=crop&w=1350&q=80') center/cover no-repeat;
+    color: #ffffff;
+}
+
+.aktonz-hero h1 {
+    font-size: 3rem;
+    margin-bottom: 20px;
 }
 
 .aktonz-stats {
-    background: #ffffff;
+    background: #f0f4f7;
     padding: 40px 0;
 }
 .aktonz-stats .stats-grid {
@@ -1725,23 +1731,46 @@ html {
     text-align: center;
 }
 .aktonz-stats .stat-number {
-    font-size: 2rem;
+    font-size: 2.5rem;
     font-weight: bold;
     display: block;
+    color: #00ae68;
 }
 
 .aktonz-selling {
-    background: #fffbef;
+    background: #eaf7f1;
     text-align: center;
     padding: 40px 0;
 }
 .aktonz-selling .cta-button {
     margin-top: 20px;
+    background: #00ae68;
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 4px;
+    display: inline-block;
 }
 
 .aktonz-search {
     padding: 40px 0;
     text-align: center;
+}
+.aktonz-search .search-form {
+    max-width: 500px;
+    margin: 0 auto;
+    display: flex;
+}
+.aktonz-search .search-form__field {
+    flex: 1;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-right: none;
+}
+.aktonz-search .search-form__submit {
+    padding: 10px 20px;
+    background: #00ae68;
+    color: #fff;
+    border: none;
 }
 
 .aktonz-testimonials {
@@ -1752,4 +1781,5 @@ html {
     max-width: 600px;
     margin: 0 auto;
     text-align: center;
+    font-style: italic;
 }
