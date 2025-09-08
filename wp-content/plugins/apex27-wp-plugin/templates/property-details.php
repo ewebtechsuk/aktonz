@@ -153,6 +153,7 @@ $property_images = $details->images ?? [];
         <div class="row g-4 mt-4">
             <div class="col-lg-7">
 
+
                 <div class="property-media-tabs mb-4">
                     <div class="media-tabs-nav">
                         <button class="media-tab-btn active" data-target="photos">Photos</button>
