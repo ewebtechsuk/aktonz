@@ -271,6 +271,7 @@ $property_images = $details->images ?? [];
                         <a href="<?=htmlspecialchars($brochure->url)?>" class="btn btn-outline-brand" target="_blank">
                             <i class="fa fa-file-pdf"></i> <?=htmlspecialchars(__('Brochure', $text_domain))?>
                         </a>
+
                     </div>
                     <?php }
                 } ?>
@@ -358,6 +359,21 @@ function closeViewingForm() {
             if(contents[target]) contents[target].classList.add('active');
         });
     });
+})();
+(function(){
+    var noteKey = 'apex27-note-' + <?=json_encode($details->id ?? '')?>;
+    var textarea = document.getElementById('property-note');
+    var saved = document.getElementById('note-saved');
+    var btn = document.getElementById('save-note-btn');
+    if(textarea && btn){
+        textarea.value = localStorage.getItem(noteKey) || '';
+        btn.addEventListener('click', function(e){
+            e.preventDefault();
+            localStorage.setItem(noteKey, textarea.value);
+            saved.style.display='block';
+            setTimeout(function(){ saved.style.display='none'; }, 2000);
+        });
+    }
 })();
 (function(){
     var noteKey = 'apex27-note-' + <?=json_encode($details->id ?? '')?>;
