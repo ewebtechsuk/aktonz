@@ -150,7 +150,7 @@ $property_images = $details->images ?? [];
 </style>
 <div class="container-fluid px-0">
     <div class="container">
-        <div class="row g-4 mt-4">
+        <div class="row g-4 mt-4" style="--bs-gutter-x:30px;">
             <div class="col-lg-7">
 
 
