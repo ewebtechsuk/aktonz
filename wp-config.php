@@ -97,6 +97,7 @@ if ( getenv( 'WP_SITEURL' ) ) {
 if ( ! defined( 'WP_DEBUG' ) ) {
     define( 'WP_DEBUG', true );
 }
+// Log debug messages to the default location in wp-content for easier troubleshooting.
 define( 'WP_DEBUG_LOG', true );
 define( 'WP_DEBUG_DISPLAY', false );
 
