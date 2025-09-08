@@ -116,12 +116,14 @@ class Plugin {
 		require_once $includes_path . '/settings/editor-preview.php';
 		require_once $includes_path . '/settings/settings.php';
 
-		// Cloud List Table shared functions.
-		require_once $includes_path . '/cloud/list-table-shared-ops.php';
+                // Cloud List Table shared functions.
+                require_once $includes_path . '/cloud/list-table-shared-ops.php';
 
-		$this->active_snippets = new Active_Snippets();
-		$this->front_end = new Front_End();
-		$this->cloud_api = new Cloud_API();
+                // Load class for managing active snippets.
+                require_once $includes_path . '/class-active-snippets.php';
+                $this->active_snippets = new Active_Snippets();
+                $this->front_end = new Front_End();
+                $this->cloud_api = new Cloud_API();
 
 		$upgrade = new Upgrade( $this->version, $this->db );
 		add_action( 'plugins_loaded', array( $upgrade, 'run' ), 0 );
