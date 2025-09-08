@@ -46,7 +46,6 @@ $property_images = $details->images ?? [];
     width: 100%;
     height: 400px;
     object-fit: cover;
-    border-radius: 1rem;
     background: #f8f9fa;
     margin-bottom: 1rem;
     transition: opacity 0.2s;
