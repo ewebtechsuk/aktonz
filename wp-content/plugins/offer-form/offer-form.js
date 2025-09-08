@@ -3,6 +3,7 @@ document.addEventListener('DOMContentLoaded', function () {
     var closeBtn = document.getElementById('offer-form-close');
     var panel = document.getElementById('offer-form-panel');
     var form = panel ? panel.querySelector('form') : null;
+
     if (openBtn && closeBtn && panel) {
         openBtn.addEventListener('click', function () {
             panel.classList.add('active');
@@ -36,4 +37,5 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     }
+
 });

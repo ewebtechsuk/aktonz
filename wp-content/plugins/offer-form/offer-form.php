@@ -57,6 +57,7 @@ function offer_form_enqueue_assets() {
             'property_title' => $property_title,
             'nonce' => wp_create_nonce('offer_form_submit')
         ]);
+
     }
 }
 add_action('wp_enqueue_scripts', 'offer_form_enqueue_assets');
@@ -68,6 +69,7 @@ function offer_form_render_markup() {
     $details = offer_form_get_current_listing();
     $property_id = $details->id ?? '';
     $property_title = $details->displayAddress ?? '';
+
     ?>
     <div id="offer-form-panel" class="offer-form-panel">
         <div class="offer-form-content">
@@ -78,6 +80,7 @@ function offer_form_render_markup() {
                 <input type="hidden" name="action" value="submit_property_offer" />
                 <input type="hidden" name="property_id" value="<?php echo esc_attr($property_id); ?>" />
                 <input type="hidden" name="property_title" value="<?php echo esc_attr($property_title); ?>" />
+
                 <p>
                     <label for="offer-name"><?php esc_html_e('Name', 'offer-form'); ?></label>
                     <input type="text" id="offer-name" name="name" required />
@@ -150,3 +153,4 @@ function offer_form_handle_submission() {
 }
 add_action('wp_ajax_submit_property_offer', 'offer_form_handle_submission');
 add_action('wp_ajax_nopriv_submit_property_offer', 'offer_form_handle_submission');
+
