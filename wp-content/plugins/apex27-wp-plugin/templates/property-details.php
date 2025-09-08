@@ -46,6 +46,7 @@ $property_images = $details->images ?? [];
     height: 400px;
     object-fit: cover;
     border-radius: 1rem;
+
     background: #f8f9fa;
     margin-bottom: 1rem;
     transition: opacity 0.2s;
@@ -66,6 +67,7 @@ $property_images = $details->images ?? [];
     display: flex;
     align-items: center;
     justify-content: center;
+
 }
 .property-image-slider .slider-prev { left: 10px; }
 .property-image-slider .slider-next { right: 10px; }
@@ -76,6 +78,7 @@ $property_images = $details->images ?? [];
     .property-slider-image { height: 180px; }
     .property-media-tabs .property-image-slider,
     .property-media-tabs .property-slider-image {
+
         width: 100vw;
         margin-left: calc(50% - 50vw);
     }
@@ -184,6 +187,7 @@ $property_images = $details->images ?? [];
         </div>
         <div class="row g-4">
             <div class="col-12">
+
                 <div class="property-media-tabs mb-4">
                     <div class="media-tabs-nav">
                         <button class="media-tab-btn active" data-target="photos">Photos</button>
@@ -201,6 +205,7 @@ $property_images = $details->images ?? [];
                             <?php if(count($property_images) > 1) { ?>
                             <button class="slider-control slider-prev" type="button" aria-label="<?=htmlspecialchars(__('Previous', $text_domain))?>">&#10094;</button>
                             <button class="slider-control slider-next" type="button" aria-label="<?=htmlspecialchars(__('Next', $text_domain))?>">&#10095;</button>
+
                             <?php } ?>
                         </div>
                     </div>
@@ -284,10 +289,12 @@ $property_images = $details->images ?? [];
                         <a href="<?=htmlspecialchars($brochure->url)?>" class="btn btn-outline-brand" target="_blank">
                             <i class="fa fa-file-pdf"></i> <?=htmlspecialchars(__('Brochure', $text_domain))?>
                         </a>
+
                     </div>
                     <?php }
                 } ?>
             </div>
+
         </div>
     </div>
 </div>
@@ -337,6 +344,7 @@ $property_images = $details->images ?? [];
         <?php $property_details = $details; include __DIR__ . '/enquiry-form.php'; ?>
     </div>
 </div>
+
 <script>
 function showEnquiryForm() {
     document.getElementById('enquiry-form-modal').style.display = 'block';
@@ -355,6 +363,7 @@ function showOfferForm() {
 }
 function closeOfferForm() {
     document.getElementById('offer-form-modal').style.display = 'none';
+
 }
 (function() {
     var slotCount = 1;
@@ -420,6 +429,7 @@ function closeOfferForm() {
     }
     if(prev) prev.addEventListener('click', function(){ show(index-1); });
     if(next) next.addEventListener('click', function(){ show(index+1); });
+
 })();
 </script>
 <?php

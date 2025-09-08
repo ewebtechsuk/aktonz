@@ -1,0 +1,40 @@
+.offer-form-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 400px;
+    max-width: 100%;
+    height: 100%;
+    background: #ffffff;
+    box-shadow: -2px 0 8px rgba(0,0,0,0.2);
+    transform: translateX(100%);
+    transition: transform 0.3s ease-in-out;
+    z-index: 1000;
+}
+.offer-form-panel.active {
+    transform: translateX(0);
+}
+.offer-form-open {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 999;
+    background: #ffce00;
+    border: none;
+    padding: 12px 20px;
+    cursor: pointer;
+}
+.offer-form-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    cursor: pointer;
+}
+.offer-form-content {
+    padding: 20px;
+    height: 100%;
+    overflow-y: auto;
+}
