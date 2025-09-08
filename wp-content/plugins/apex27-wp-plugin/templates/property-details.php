@@ -311,19 +311,18 @@ $property_images = $details->images ?? [];
         </form>
     </div>
 </div>
-<!-- Modal for Make Offer -->
-<div id="offer-form-modal" class="modal" style="display: none;">
-    <div class="modal-content">
-        <span class="close" onclick="closeOfferForm();">&times;</span>
-        <?php echo do_shortcode('[offrz_offer_form]'); ?>
-    </div>
-</div>
 <script>
 function showViewingForm() {
     document.getElementById('viewing-form-modal').style.display = 'block';
 }
 function closeViewingForm() {
     document.getElementById('viewing-form-modal').style.display = 'none';
+}
+function showOfferForm() {
+    var panel = document.getElementById('offer-form-panel');
+    if (panel) {
+        panel.classList.add('active');
+    }
 }
 (function() {
     var slotCount = 1;
