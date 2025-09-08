@@ -46,32 +46,19 @@ $property_images = $details->images ?? [];
     background: #f8f9fa;
     transition: opacity 0.2s;
 }
-.property-thumbnails {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-}
-.property-thumbnail {
-    width: 80px;
-    height: 60px;
-    object-fit: cover;
-    border-radius: 0.5rem;
-    border: 2px solid transparent;
-    cursor: pointer;
-    transition: border 0.2s;
-}
-.property-thumbnail.active,
-.property-thumbnail:focus {
-    border: 2px solid #007bff;
+.property-media-tabs .carousel-item img {
+    width: 100%;
 }
 @media (max-width: 991px) {
     .property-main-image { height: 250px; }
-    .property-thumbnail { width: 60px; height: 45px; }
 }
 @media (max-width: 575px) {
     .property-main-image { height: 180px; }
-    .property-thumbnail { width: 44px; height: 33px; }
+    .property-media-tabs .carousel,
+    .property-media-tabs .carousel-item img {
+        width: 100vw;
+        margin-left: calc(50% - 50vw);
+    }
 }
 .sticky-sidebar {
     position: sticky;
@@ -184,10 +171,23 @@ $property_images = $details->images ?? [];
                     </div>
                     <?php if($property_images) { ?>
                     <div id="tab-photos" class="media-tab-content active">
-                        <img id="mainPropertyImage" class="property-main-image" src="<?=htmlspecialchars($property_images[0]->url)?>" alt="<?=htmlspecialchars($property_images[0]->caption ?? $details->displayAddress)?>" />
-                        <div class="property-thumbnails mt-2">
-                            <?php foreach($property_images as $idx => $img) { ?>
-                                <img class="property-thumbnail<?=$idx === 0 ? ' active' : ''?>" src="<?=htmlspecialchars($img->url)?>" alt="<?=htmlspecialchars($img->caption ?? $details->displayAddress)?>" data-full="<?=htmlspecialchars($img->url)?>" data-idx="<?=$idx?>" tabindex="0" />
+                        <div id="propertyImageCarousel" class="carousel slide" data-bs-ride="carousel">
+                            <div class="carousel-inner">
+                                <?php foreach($property_images as $idx => $img) { ?>
+                                <div class="carousel-item<?=$idx === 0 ? ' active' : ''?>">
+                                    <img class="d-block w-100 property-main-image" src="<?=htmlspecialchars($img->url)?>" alt="<?=htmlspecialchars($img->caption ?? $details->displayAddress)?>" />
+                                </div>
+                                <?php } ?>
+                            </div>
+                            <?php if(count($property_images) > 1) { ?>
+                            <button class="carousel-control-prev" type="button" data-bs-target="#propertyImageCarousel" data-bs-slide="prev">
+                                <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+                                <span class="visually-hidden"><?=htmlspecialchars(__('Previous', $text_domain))?></span>
+                            </button>
+                            <button class="carousel-control-next" type="button" data-bs-target="#propertyImageCarousel" data-bs-slide="next">
+                                <span class="carousel-control-next-icon" aria-hidden="true"></span>
+                                <span class="visually-hidden"><?=htmlspecialchars(__('Next', $text_domain))?></span>
+                            </button>
                             <?php } ?>
                         </div>
                     </div>
@@ -359,23 +359,20 @@ function showOfferForm() {
         });
     });
 })();
-// Property image thumbnail click handler
-(function() {
-    var mainImg = document.getElementById('mainPropertyImage');
-    var thumbs = document.querySelectorAll('.property-thumbnail');
-    thumbs.forEach(function(thumb) {
-        thumb.addEventListener('click', function() {
-            mainImg.src = this.getAttribute('data-full');
-            thumbs.forEach(function(t) { t.classList.remove('active'); });
-            this.classList.add('active');
+(function(){
+    var noteKey = 'apex27-note-' + <?=json_encode($details->id ?? '')?>;
+    var textarea = document.getElementById('property-note');
+    var saved = document.getElementById('note-saved');
+    var btn = document.getElementById('save-note-btn');
+    if(textarea && btn){
+        textarea.value = localStorage.getItem(noteKey) || '';
+        btn.addEventListener('click', function(e){
+            e.preventDefault();
+            localStorage.setItem(noteKey, textarea.value);
+            saved.style.display='block';
+            setTimeout(function(){ saved.style.display='none'; }, 2000);
         });
-        thumb.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                this.click();
-            }
-        });
-    });
+    }
 })();
 (function(){
     var noteKey = 'apex27-note-' + <?=json_encode($details->id ?? '')?>;
