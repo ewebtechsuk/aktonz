@@ -7,6 +7,7 @@
 $apex27 = $GLOBALS["apex27"];
 
 $text_domain = "apex27";
+$branches = null;
 
 if(isset($property_details)) {
 	$branch_html = __("To make an enquiry for this property, please complete the form below.", $text_domain);

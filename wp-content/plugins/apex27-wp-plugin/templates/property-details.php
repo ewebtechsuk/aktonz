@@ -9,7 +9,6 @@ $options = $apex27->get_portal_options();
 $details = $apex27->get_property_details();
 $apex27->set_listing_details($details);
 $featured = !empty($details->isFeatured);
-$form_path = $apex27->get_template_path("enquiry-form");
 get_header();
 if(!$details) {
     ?>
@@ -47,32 +46,19 @@ $property_images = $details->images ?? [];
     background: #f8f9fa;
     transition: opacity 0.2s;
 }
-.property-thumbnails {
-    display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-}
-.property-thumbnail {
-    width: 80px;
-    height: 60px;
-    object-fit: cover;
-    border-radius: 0.5rem;
-    border: 2px solid transparent;
-    cursor: pointer;
-    transition: border 0.2s;
-}
-.property-thumbnail.active,
-.property-thumbnail:focus {
-    border: 2px solid #007bff;
+.property-media-tabs .carousel-item img {
+    width: 100%;
 }
 @media (max-width: 991px) {
     .property-main-image { height: 250px; }
-    .property-thumbnail { width: 60px; height: 45px; }
 }
 @media (max-width: 575px) {
     .property-main-image { height: 180px; }
-    .property-thumbnail { width: 44px; height: 33px; }
+    .property-media-tabs .carousel,
+    .property-media-tabs .carousel-item img {
+        width: 100vw;
+        margin-left: calc(50% - 50vw);
+    }
 }
 .sticky-sidebar {
     position: sticky;
@@ -144,7 +130,7 @@ $property_images = $details->images ?? [];
     <div class="container">
         <div class="row g-4 mt-4">
             <div class="col-lg-7">
-                <div class="property-media-tabs mb-4">
+              <div class="property-media-tabs mb-4">
                     <div class="media-tabs-nav">
                         <button class="media-tab-btn active" data-target="photos">Photos</button>
                         <?php if($details->floorplans) { ?>
@@ -154,10 +140,23 @@ $property_images = $details->images ?? [];
                     </div>
                     <?php if($property_images) { ?>
                     <div id="tab-photos" class="media-tab-content active">
-                        <img id="mainPropertyImage" class="property-main-image" src="<?=htmlspecialchars($property_images[0]->url)?>" alt="<?=htmlspecialchars($property_images[0]->caption ?? $details->displayAddress)?>" />
-                        <div class="property-thumbnails mt-2">
-                            <?php foreach($property_images as $idx => $img) { ?>
-                                <img class="property-thumbnail<?=$idx === 0 ? ' active' : ''?>" src="<?=htmlspecialchars($img->url)?>" alt="<?=htmlspecialchars($img->caption ?? $details->displayAddress)?>" data-full="<?=htmlspecialchars($img->url)?>" data-idx="<?=$idx?>" tabindex="0" />
+                        <div id="propertyImageCarousel" class="carousel slide" data-bs-ride="carousel">
+                            <div class="carousel-inner">
+                                <?php foreach($property_images as $idx => $img) { ?>
+                                <div class="carousel-item<?=$idx === 0 ? ' active' : ''?>">
+                                    <img class="d-block w-100 property-main-image" src="<?=htmlspecialchars($img->url)?>" alt="<?=htmlspecialchars($img->caption ?? $details->displayAddress)?>" />
+                                </div>
+                                <?php } ?>
+                            </div>
+                            <?php if(count($property_images) > 1) { ?>
+                            <button class="carousel-control-prev" type="button" data-bs-target="#propertyImageCarousel" data-bs-slide="prev">
+                                <span class="carousel-control-prev-icon" aria-hidden="true"></span>
+                                <span class="visually-hidden"><?=htmlspecialchars(__('Previous', $text_domain))?></span>
+                            </button>
+                            <button class="carousel-control-next" type="button" data-bs-target="#propertyImageCarousel" data-bs-slide="next">
+                                <span class="carousel-control-next-icon" aria-hidden="true"></span>
+                                <span class="visually-hidden"><?=htmlspecialchars(__('Next', $text_domain))?></span>
+                            </button>
                             <?php } ?>
                         </div>
                     </div>
@@ -241,6 +240,7 @@ $property_images = $details->images ?? [];
                         <a href="<?=htmlspecialchars($brochure->url)?>" class="btn btn-outline-brand" target="_blank">
                             <i class="fa fa-file-pdf"></i> <?=htmlspecialchars(__('Brochure', $text_domain))?>
                         </a>
+
                     </div>
                     <?php }
                 } ?>
@@ -286,6 +286,7 @@ $property_images = $details->images ?? [];
                     </div>
                 </div>
             </div>
+
         </div>
     </div>
 </div>
@@ -369,23 +370,20 @@ function showOfferForm() {
         });
     });
 })();
-// Property image thumbnail click handler
-(function() {
-    var mainImg = document.getElementById('mainPropertyImage');
-    var thumbs = document.querySelectorAll('.property-thumbnail');
-    thumbs.forEach(function(thumb) {
-        thumb.addEventListener('click', function() {
-            mainImg.src = this.getAttribute('data-full');
-            thumbs.forEach(function(t) { t.classList.remove('active'); });
-            this.classList.add('active');
+(function(){
+    var noteKey = 'apex27-note-' + <?=json_encode($details->id ?? '')?>;
+    var textarea = document.getElementById('property-note');
+    var saved = document.getElementById('note-saved');
+    var btn = document.getElementById('save-note-btn');
+    if(textarea && btn){
+        textarea.value = localStorage.getItem(noteKey) || '';
+        btn.addEventListener('click', function(e){
+            e.preventDefault();
+            localStorage.setItem(noteKey, textarea.value);
+            saved.style.display='block';
+            setTimeout(function(){ saved.style.display='none'; }, 2000);
         });
-        thumb.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                this.click();
-            }
-        });
-    });
+    }
 })();
 (function(){
     var noteKey = 'apex27-note-' + <?=json_encode($details->id ?? '')?>;
@@ -478,7 +476,7 @@ if (!empty($details->nearestStations) && is_array($details->nearestStations)) {
         <div class="apex27-cta-box">
             <h2 class="mb-3" dir="auto"><?=htmlspecialchars(__('Interested in this property?', $text_domain))?></h2>
             <p class="lead mb-4" dir="auto"><?=htmlspecialchars(__('Call our team now to arrange a viewing or ask a question.', $text_domain))?></p>
-            <a href="#property-details-contact-form" class="btn btn-warning btn-lg"><?=htmlspecialchars(__('Call / Enquire', $text_domain))?></a>
+            
         </div>
     </div>
 </div>
@@ -539,7 +537,7 @@ if (!empty($details->nearestStations) && is_array($details->nearestStations)) {
             <div class="apex27-panel">
                 <h4><?=htmlspecialchars(__('What could your property be worth?', $text_domain))?></h4>
                 <p class="mb-3" style="font-size:.85rem;"><?=htmlspecialchars(__('Request a free, no obligation valuation from our local expert.', $text_domain))?></p>
-                <a href="#property-details-contact-form" class="btn btn-outline-brand btn-sm"><?=htmlspecialchars(__('Get a valuation', $text_domain))?></a>
+                
             </div>
         </div>
         <div class="apex27-grid-cols-3">
@@ -567,7 +565,7 @@ if (!empty($details->nearestStations) && is_array($details->nearestStations)) {
                     <?=htmlspecialchars(__('Local Property Team', $text_domain))?><br>
                     <a href="tel:<?=preg_replace('/[^0-9+]/','', get_option('admin_phone', '+440000000000'))?>" style="text-decoration:none;">Call <?=htmlspecialchars(get_option('admin_phone','+44 00 0000 0000'))?></a>
                 </p>
-                <a href="#property-details-contact-form" class="btn btn-sm btn-brand"><?=htmlspecialchars(__('Contact us', $text_domain))?></a>
+                
             </div>
         </div>
     </div>
