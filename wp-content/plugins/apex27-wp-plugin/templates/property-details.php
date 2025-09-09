@@ -200,7 +200,10 @@ $property_images = $details->images ?? [];
                     <i class="fa fa-calendar-check"></i> Book Viewing
                 </button>
 
-                <button class="btn btn-lg btn-primary mb-2" type="button" onclick="if (typeof showOfferForm === 'function') { showOfferForm(); }">
+                <button
+                    class="btn btn-lg btn-primary mb-2"
+                    type="button"
+                    onclick="if (typeof showOfferForm === 'function') { showOfferForm(); }">
                     <i class="fa fa-hand-holding-usd"></i> Make Offer
                 </button>
             </div>
