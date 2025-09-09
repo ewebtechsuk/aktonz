@@ -145,12 +145,34 @@ $property_images = $details->images ?? [];
 }
 .media-tab-content { display: none; }
 .media-tab-content.active { display: block; }
+
+.property-main {
+    display: flex;
+    gap: 30px;
+}
+.property-media-container {
+    flex: 0 0 600px;
+    max-width: 600px;
+}
+.property-sidebar {
+    flex: 0 0 350px;
+    max-width: 350px;
+}
 @media (max-width: 991px) {
+    .property-main {
+        flex-direction: column;
+    }
+    .property-media-container,
+    .property-sidebar {
+        flex: 1 1 100%;
+        max-width: 100%;
+    }
     .sticky-sidebar { position: static; top: auto; }
 }
 </style>
 <div class="container-fluid px-0">
     <div class="container">
+
         <div class="property-header mt-4">
             <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2">
                 <div>
@@ -294,6 +316,7 @@ $property_images = $details->images ?? [];
                     <?php }
                 } ?>
             </div>
+
             <div class="col-lg-5">
                 <div class="property-header mb-4">
                     <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2">
@@ -324,6 +347,7 @@ $property_images = $details->images ?? [];
                         <button class="btn btn-lg btn-warning mb-2" onclick="showViewingForm(); return false;">
                             <i class="fa fa-calendar-check"></i> Book Viewing
                         </button>
+
                         <button class="btn btn-lg btn-primary mb-2" type="button" onclick="showOfferForm();">
                             <i class="fa fa-hand-holding-usd"></i> Make Offer
                         </button>
