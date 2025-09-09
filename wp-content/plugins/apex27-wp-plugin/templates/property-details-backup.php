@@ -594,7 +594,7 @@ $show_back = strpos($referer, "search") !== false;
 
 				</a>
 
-				<a href="#" class="btn btn-brand" onclick="showOfferForm(); return false;">
+				<a href="#" class="btn btn-brand" onclick="if (typeof showOfferForm === 'function') { showOfferForm(); } return false;">
    				<?=htmlspecialchars(__("Make Offer", $text_domain))?>
 				</a>
 
