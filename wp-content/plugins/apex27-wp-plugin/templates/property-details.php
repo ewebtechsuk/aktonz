@@ -177,7 +177,7 @@ $property_images = $details->images ?? [];
                 <button class="btn btn-lg btn-warning mb-2" onclick="showViewingForm(); return false;">
                     <i class="fa fa-calendar-check"></i> Book Viewing
                 </button>
-                <button class="btn btn-lg btn-primary mb-2" onclick="showOfferForm(); return false;">
+                <button class="btn btn-lg btn-primary mb-2" type="button" onclick="showOfferForm();">
                     <i class="fa fa-hand-holding-usd"></i> Make Offer
                 </button>
                 <button class="btn btn-lg btn-outline-secondary mb-2" onclick="showEnquiryForm(); return false;">
@@ -324,7 +324,7 @@ $property_images = $details->images ?? [];
                         <button class="btn btn-lg btn-warning mb-2" onclick="showViewingForm(); return false;">
                             <i class="fa fa-calendar-check"></i> Book Viewing
                         </button>
-                        <button class="btn btn-lg btn-primary mb-2" onclick="showOfferForm(); return false;">
+                        <button class="btn btn-lg btn-primary mb-2" type="button" onclick="showOfferForm();">
                             <i class="fa fa-hand-holding-usd"></i> Make Offer
                         </button>
                     </div>
@@ -372,13 +372,6 @@ $property_images = $details->images ?? [];
         </form>
     </div>
 </div>
-<!-- Modal for Make Offer -->
-<div id="offer-form-modal" class="modal" style="display: none;">
-    <div class="modal-content">
-        <span class="close" onclick="closeOfferForm();">&times;</span>
-        <?php echo do_shortcode('[offrz_offer_form]'); ?>
-    </div>
-</div>
 <!-- Modal for Enquiry -->
 <div id="enquiry-form-modal" class="modal" style="display: none;">
     <div class="modal-content">
@@ -399,13 +392,6 @@ function showViewingForm() {
 }
 function closeViewingForm() {
     document.getElementById('viewing-form-modal').style.display = 'none';
-}
-function showOfferForm() {
-    document.getElementById('offer-form-modal').style.display = 'block';
-}
-function closeOfferForm() {
-    document.getElementById('offer-form-modal').style.display = 'none';
-
 }
 (function() {
     var slotCount = 1;

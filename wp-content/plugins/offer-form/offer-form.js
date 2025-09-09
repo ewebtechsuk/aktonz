@@ -1,16 +1,29 @@
 document.addEventListener('DOMContentLoaded', function () {
+    var panel = document.getElementById('offer-form-panel');
     var openBtn = document.getElementById('offer-form-open');
     var closeBtn = document.getElementById('offer-form-close');
-    var panel = document.getElementById('offer-form-panel');
     var form = panel ? panel.querySelector('form') : null;
 
-    if (openBtn && closeBtn && panel) {
-        openBtn.addEventListener('click', function () {
+    function openPanel() {
+        if (panel) {
             panel.classList.add('active');
-        });
-        closeBtn.addEventListener('click', function () {
+        }
+    }
+
+    function closePanel() {
+        if (panel) {
             panel.classList.remove('active');
-        });
+        }
+    }
+
+    window.showOfferForm = openPanel;
+    window.closeOfferForm = closePanel;
+
+    if (openBtn) {
+        openBtn.addEventListener('click', openPanel);
+    }
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closePanel);
     }
     if (form) {
         form.addEventListener('submit', function (e) {
@@ -27,7 +40,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (data.success) {
                     alert('Thank you for your offer!');
                     form.reset();
-                    panel.classList.remove('active');
+                    closePanel();
                 } else {
                     alert(data.data && data.data.message ? data.data.message : 'Error submitting offer');
                 }
@@ -37,5 +50,4 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     }
-
 });
