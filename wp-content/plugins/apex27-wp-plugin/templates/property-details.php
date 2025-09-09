@@ -9,7 +9,6 @@ $options = $apex27->get_portal_options();
 $details = $apex27->get_property_details();
 $apex27->set_listing_details($details);
 $featured = !empty($details->isFeatured);
-$form_path = $apex27->get_template_path("enquiry-form");
 get_header();
 if(!$details) {
     ?>
@@ -47,6 +46,7 @@ $property_images = $details->images ?? [];
     height: 400px;
     object-fit: cover;
     border-radius: 1rem;
+
     background: #f8f9fa;
     margin-bottom: 1rem;
     transition: opacity 0.2s;
@@ -172,9 +172,43 @@ $property_images = $details->images ?? [];
 </style>
 <div class="container-fluid px-0">
     <div class="container">
-        <div class="property-main mt-4">
-            <div class="property-media-container">
 
+        <div class="property-header mt-4">
+            <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2">
+                <div>
+                    <h1 class="property-title mb-1"><?=htmlspecialchars($details->displayAddress)?></h1>
+                    <?php if (!empty($details->propertyType)) : ?>
+                        <div class="text-muted mb-2" style="font-size:1.1rem;">
+                            <?=htmlspecialchars($details->propertyType)?></div>
+                    <?php endif; ?>
+                    <?php if($featured): ?>
+                        <span class="badge bg-success">Featured</span>
+                    <?php endif; ?>
+                </div>
+                <div class="property-meta d-flex flex-wrap gap-3 mt-2">
+                    <span><i class="fa fa-bed"></i> <?=htmlspecialchars($details->bedrooms)?> Beds</span>
+                    <span><i class="fa fa-bath"></i> <?=htmlspecialchars($details->bathrooms)?> Baths</span>
+                    <span><i class="fa fa-couch"></i> <?=htmlspecialchars($details->livingRooms)?> Living</span>
+                </div>
+            </div>
+            <div class="property-price display-4 text-brand mt-3">
+                <?=htmlspecialchars($details->displayPrice)?>
+                <small><?=htmlspecialchars($details->pricePrefix)?></small>
+            </div>
+            <div class="property-actions mt-4 d-flex flex-wrap gap-2" style="gap:10px;">
+                <button class="btn btn-lg btn-warning mb-2" onclick="showViewingForm(); return false;">
+                    <i class="fa fa-calendar-check"></i> Book Viewing
+                </button>
+                <button class="btn btn-lg btn-primary mb-2" type="button" onclick="showOfferForm();">
+                    <i class="fa fa-hand-holding-usd"></i> Make Offer
+                </button>
+                <button class="btn btn-lg btn-outline-secondary mb-2" onclick="showEnquiryForm(); return false;">
+                    <i class="fa fa-envelope"></i> <?=htmlspecialchars(__('Enquiry', $text_domain))?>
+                </button>
+            </div>
+        </div>
+        <div class="row g-4">
+            <div class="col-12">
 
                 <div class="property-media-tabs mb-4">
                     <div class="media-tabs-nav">
@@ -282,7 +316,8 @@ $property_images = $details->images ?? [];
                     <?php }
                 } ?>
             </div>
-            <div class="property-sidebar">
+
+            <div class="col-lg-5">
                 <div class="property-header mb-4">
                     <div class="d-flex flex-column flex-md-row justify-content-between align-items-md-center gap-2">
                         <div>
@@ -312,7 +347,8 @@ $property_images = $details->images ?? [];
                         <button class="btn btn-lg btn-warning mb-2" onclick="showViewingForm(); return false;">
                             <i class="fa fa-calendar-check"></i> Book Viewing
                         </button>
-                        <button class="btn btn-lg btn-primary mb-2" onclick="showOfferForm(); return false;">
+
+                        <button class="btn btn-lg btn-primary mb-2" type="button" onclick="showOfferForm();">
                             <i class="fa fa-hand-holding-usd"></i> Make Offer
                         </button>
                     </div>
@@ -323,6 +359,7 @@ $property_images = $details->images ?? [];
                     </div>
                 </div>
             </div>
+
 
         </div>
     </div>
@@ -359,18 +396,26 @@ $property_images = $details->images ?? [];
         </form>
     </div>
 </div>
+<!-- Modal for Enquiry -->
+<div id="enquiry-form-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <span class="close" onclick="closeEnquiryForm();">&times;</span>
+        <?php $property_details = $details; include __DIR__ . '/enquiry-form.php'; ?>
+    </div>
+</div>
+
 <script>
+function showEnquiryForm() {
+    document.getElementById('enquiry-form-modal').style.display = 'block';
+}
+function closeEnquiryForm() {
+    document.getElementById('enquiry-form-modal').style.display = 'none';
+}
 function showViewingForm() {
     document.getElementById('viewing-form-modal').style.display = 'block';
 }
 function closeViewingForm() {
     document.getElementById('viewing-form-modal').style.display = 'none';
-}
-function showOfferForm() {
-    var panel = document.getElementById('offer-form-panel');
-    if (panel) {
-        panel.classList.add('active');
-    }
 }
 (function() {
     var slotCount = 1;

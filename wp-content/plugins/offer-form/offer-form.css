@@ -14,16 +14,6 @@
 .offer-form-panel.active {
     transform: translateX(0);
 }
-.offer-form-open {
-    position: fixed;
-    bottom: 20px;
-    right: 20px;
-    z-index: 999;
-    background: #ffce00;
-    border: none;
-    padding: 12px 20px;
-    cursor: pointer;
-}
 .offer-form-close {
     background: none;
     border: none;

@@ -103,7 +103,6 @@ function offer_form_render_markup() {
             </form>
         </div>
     </div>
-    <button id="offer-form-open" class="offer-form-open" type="button"><?php esc_html_e('Make an offer', 'offer-form'); ?></button>
     <?php
 }
 add_action('wp_footer', 'offer_form_render_markup');
