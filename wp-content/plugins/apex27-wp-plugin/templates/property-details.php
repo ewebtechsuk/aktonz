@@ -9,6 +9,7 @@ $options = $apex27->get_portal_options();
 $details = $apex27->get_property_details();
 $apex27->set_listing_details($details);
 $featured = !empty($details->isFeatured);
+$form_path = $apex27->get_template_path("enquiry-form");
 get_header();
 if(!$details) {
     ?>
