@@ -9,7 +9,6 @@ $options = $apex27->get_portal_options();
 $details = $apex27->get_property_details();
 $apex27->set_listing_details($details);
 $featured = !empty($details->isFeatured);
-$form_path = $apex27->get_template_path("enquiry-form");
 get_header();
 if(!$details) {
     ?>
@@ -204,9 +203,6 @@ $property_images = $details->images ?? [];
                 <button class="btn btn-lg btn-primary mb-2" type="button" onclick="if (typeof showOfferForm === 'function') { showOfferForm(); }">
                     <i class="fa fa-hand-holding-usd"></i> Make Offer
                 </button>
-                <button class="btn btn-lg btn-outline-secondary mb-2" onclick="showEnquiryForm(); return false;">
-                    <i class="fa fa-envelope"></i> <?=htmlspecialchars(__('Enquiry', $text_domain))?>
-                </button>
             </div>
         </div>
         <div class="row g-4">
@@ -343,9 +339,6 @@ $property_images = $details->images ?? [];
                         <small><?=htmlspecialchars($details->pricePrefix)?></small>
                     </div>
                     <div class="property-actions mt-4 d-flex flex-wrap gap-2" style="gap:10px;">
-                        <a href="#property-details-contact-form" class="btn btn-lg btn-brand me-2 mb-2">
-                            <i class="fa fa-envelope"></i> Make Enquiry
-                        </a>
                         <button class="btn btn-lg btn-warning mb-2" onclick="showViewingForm(); return false;">
                             <i class="fa fa-calendar-check"></i> Book Viewing
                         </button>
@@ -356,11 +349,6 @@ $property_images = $details->images ?? [];
                     </div>
                 </div>
 
-                <div class="sticky-sidebar">
-                    <div class="mb-4">
-                        <?php $apex27->include_template($form_path, ["property_details" => $details]); ?>
-                    </div>
-                </div>
             </div>
 
 
@@ -399,21 +387,7 @@ $property_images = $details->images ?? [];
         </form>
     </div>
 </div>
-<!-- Modal for Enquiry -->
-<div id="enquiry-form-modal" class="modal" style="display: none;">
-    <div class="modal-content">
-        <span class="close" onclick="closeEnquiryForm();">&times;</span>
-        <?php $property_details = $details; include __DIR__ . '/enquiry-form.php'; ?>
-    </div>
-</div>
-
 <script>
-function showEnquiryForm() {
-    document.getElementById('enquiry-form-modal').style.display = 'block';
-}
-function closeEnquiryForm() {
-    document.getElementById('enquiry-form-modal').style.display = 'none';
-}
 function showViewingForm() {
     document.getElementById('viewing-form-modal').style.display = 'block';
 }
