@@ -331,6 +331,7 @@ $property_images = $details->images ?? [];
             </div>
 
 
+
         </div>
     </div>
 </div>
