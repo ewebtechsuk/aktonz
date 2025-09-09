@@ -95,6 +95,9 @@ $property_images = $details->images ?? [];
 .property-actions .btn:last-child {
     margin-right: 0;
 }
+.property-title {
+    font-size: 1.25rem;
+}
 .property-meta span {
     font-size: 1.1rem;
     margin-right: 1.5rem;
