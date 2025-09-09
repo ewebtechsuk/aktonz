@@ -1,4 +1,8 @@
-document.addEventListener('DOMContentLoaded', function () {
+// Initialize the offer form once the DOM is ready. If this script is loaded
+// after the `DOMContentLoaded` event fires (common when enqueued in the
+// footer), we manually run the initializer to ensure the global helpers are
+// registered.
+function initOfferForm() {
     var panel = document.getElementById('offer-form-panel');
     var openBtn = document.getElementById('offer-form-open');
     var closeBtn = document.getElementById('offer-form-close');
@@ -50,4 +54,10 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     }
-});
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initOfferForm);
+} else {
+    initOfferForm();
+}
